@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"reflect"
+	"strings"
+	"sync"
 
 	"github.com/Mampiz/llm-gateway/internal/provider"
 )
@@ -14,25 +18,34 @@ import (
 const maxRequestBody = 1 << 20 // 1 MiB
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":   "ok",
-		"provider": s.provider.Name(),
-		"version":  s.version,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "ok",
+		"version":   s.version,
+		"providers": s.registry.Names(),
 	})
 }
 
-// handleChatCompletions is the gateway's only real endpoint for now: decode,
-// call the provider, encode.
+// handleChatCompletions decodes the request, resolves which provider serves
+// the requested model, and encodes whatever comes back.
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 	var req provider.ChatRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields() // loud about typos now; relax it if it gets annoying
-	if err := dec.Decode(&req); err != nil {
+	// Unknown fields are tolerated rather than rejected: real SDKs send
+	// top_p, presence_penalty, stream_options and more, and a gateway that
+	// 400s on them is a gateway nobody can use. What we do not model, we keep
+	// in Extra so providers that understand it can forward it.
+	raw, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "malformed JSON body: "+err.Error())
 		return
 	}
+	req.Extra = unknownFields(raw)
+
 	if req.Model == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "field \"model\" is required")
 		return
@@ -46,24 +59,81 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	p, err := s.registry.For(req.Model)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+
 	// r.Context() is already cancelled when the client disconnects. Layering a
 	// deadline on top bounds how long a hung upstream can hold this handler.
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
 
-	resp, err := s.provider.Chat(ctx, req)
+	resp, err := p.Chat(ctx, req)
 	if err != nil {
-		s.writeProviderError(w, r, err)
+		s.writeProviderError(w, r, p.Name(), err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// readBody reads the (already capped) request body and reports an empty one as
+// an error, since json.Unmarshal's message for it is unhelpful.
+func readBody(r *http.Request) ([]byte, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, errors.New("could not read request body: " + err.Error())
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil, errors.New("request body is empty")
+	}
+	return raw, nil
+}
+
+// knownFields is the set of JSON keys the canonical schema models, derived
+// from the struct tags themselves so the two can never drift apart.
+// sync.OnceValue computes it on first use and caches it forever.
+var knownFields = sync.OnceValue(func() map[string]struct{} {
+	fields := make(map[string]struct{})
+	t := reflect.TypeFor[provider.ChatRequest]()
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			fields[name] = struct{}{}
+		}
+	}
+	return fields
+})
+
+// unknownFields returns the top-level keys of raw that the canonical schema
+// does not model. Returns nil when there are none, so the common case costs no
+// allocation.
+func unknownFields(raw []byte) map[string]any {
+	var all map[string]any
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return nil
+	}
+
+	var extra map[string]any
+	known := knownFields()
+	for k, v := range all {
+		if _, ok := known[k]; ok {
+			continue
+		}
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		extra[k] = v
+	}
+	return extra
+}
+
 // writeProviderError maps an upstream failure onto a client-facing status.
-func (s *Server) writeProviderError(w http.ResponseWriter, r *http.Request, err error) {
+func (s *Server) writeProviderError(w http.ResponseWriter, r *http.Request, providerName string, err error) {
 	s.logger.Error("provider call failed",
-		"provider", s.provider.Name(),
+		"provider", providerName,
 		"error", err,
 		"request_id", RequestIDFrom(r.Context()),
 	)

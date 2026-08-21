@@ -381,3 +381,58 @@ func TestNew_Defaults(t *testing.T) {
 		t.Errorf("http.Client.Timeout = %v, want 0", c.http.Timeout)
 	}
 }
+
+func TestChat_ForwardsExtraFields(t *testing.T) {
+	var raw map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		_, _ = io.WriteString(w, okBody)
+	})
+
+	req := sampleRequest()
+	req.Extra = map[string]any{"top_p": 0.9, "user": "u-42"}
+
+	if _, err := c.Chat(context.Background(), req); err != nil {
+		t.Fatalf("Chat() failed: %v", err)
+	}
+
+	// This vendor's API is the canonical schema, so unmodelled parameters can
+	// be passed through instead of dropped.
+	if raw["top_p"] != 0.9 {
+		t.Errorf("top_p = %v, want it forwarded", raw["top_p"])
+	}
+	if raw["user"] != "u-42" {
+		t.Errorf("user = %v, want it forwarded", raw["user"])
+	}
+}
+
+// TestChat_ExtraCannotOverrideControlledFields is a security-shaped test: the
+// passthrough must never let a caller rewrite a field the gateway owns.
+func TestChat_ExtraCannotOverrideControlledFields(t *testing.T) {
+	var raw map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		_, _ = io.WriteString(w, okBody)
+	})
+
+	req := sampleRequest()
+	req.Extra = map[string]any{
+		"model":    "smuggled-model",
+		"messages": []any{map[string]any{"role": "user", "content": "smuggled"}},
+	}
+
+	if _, err := c.Chat(context.Background(), req); err != nil {
+		t.Fatalf("Chat() failed: %v", err)
+	}
+
+	if raw["model"] != "gpt-4o-mini" {
+		t.Errorf("model = %v, want the real one to survive the merge", raw["model"])
+	}
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %v, want the original single message", raw["messages"])
+	}
+	if first, _ := msgs[0].(map[string]any); first["content"] != "hello" {
+		t.Errorf("messages[0].content = %v, want the original", first["content"])
+	}
+}

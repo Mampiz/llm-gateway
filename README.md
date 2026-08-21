@@ -8,7 +8,29 @@ A single OpenAI-compatible endpoint in front of several LLM providers: routing, 
 
 ## Status
 
-Phase 1 — basic passthrough proxy. Work in progress.
+Phase 2 — multi-provider normalization. Work in progress.
+
+## Routing
+
+One OpenAI-shaped endpoint, several vendors behind it. The provider is chosen
+per request from the `model` field:
+
+| Model prefix | Provider |
+|---|---|
+| `gpt-`, `o1-`, `o3-`, `o4-`, `chatgpt-` | OpenAI |
+| `claude-` | Anthropic |
+| `mock-` | built-in fake, no key required |
+
+Longer prefixes win over shorter ones, so a specific rule always beats a
+general one regardless of wiring order. Models matching nothing fall back to
+`GATEWAY_PROVIDER`.
+
+Every vendor speaks its own dialect — different endpoints, auth headers,
+message shapes and stop-reason vocabularies. Each provider package owns the
+translation to and from the gateway's canonical schema, and no vendor
+vocabulary is visible outside it. Request fields the gateway does not model
+(`top_p`, `presence_penalty`, `user`, ...) are preserved and forwarded to
+providers that understand them rather than being rejected or dropped.
 
 ## Running
 

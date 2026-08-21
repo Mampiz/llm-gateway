@@ -31,6 +31,12 @@ type ChatRequest struct {
 	Temperature *float64  `json:"temperature,omitempty"`
 	MaxTokens   *int      `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
+
+	// Extra carries request fields the gateway does not model itself, so that
+	// vendor-specific parameters survive the trip instead of being silently
+	// dropped at the door. It never appears in the canonical JSON: providers
+	// decide individually whether any of it applies to their own API.
+	Extra map[string]any `json:"-"`
 }
 
 // Choice is one completion alternative returned by the model.

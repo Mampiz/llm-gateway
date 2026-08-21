@@ -12,6 +12,9 @@ services:
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-info}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_DEFAULT_MAX_TOKENS: ${ANTHROPIC_DEFAULT_MAX_TOKENS:-4096}
     restart: unless-stopped
 
   # Redis arrives in phase 4 for the distributed rate limiter and in phase 6

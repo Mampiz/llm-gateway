@@ -74,7 +74,7 @@ type errorEnvelope struct {
 
 // Chat implements provider.Provider.
 func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
-	body, err := json.Marshal(req)
+	body, err := marshalWithExtra(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -141,4 +141,38 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 	}
 
 	return &out, nil
+}
+
+// marshalWithExtra serializes req and folds req.Extra into the top-level JSON
+// object. Since this vendor's API *is* the canonical schema, parameters the
+// gateway does not model (top_p, presence_penalty, tools, ...) can be passed
+// through untouched instead of being dropped.
+//
+// The merge is deliberately defensive: an extra key never overwrites a field
+// the gateway controls, so a caller cannot smuggle in a different "messages"
+// or "model" through the passthrough.
+func marshalWithExtra(req provider.ChatRequest) ([]byte, error) {
+	base, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Extra) == 0 {
+		return base, nil
+	}
+
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(base, &merged); err != nil {
+		return nil, err
+	}
+	for k, v := range req.Extra {
+		if _, taken := merged[k]; taken {
+			continue
+		}
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			continue // an unserializable extra is dropped, not fatal
+		}
+		merged[k] = encoded
+	}
+	return json.Marshal(merged)
 }

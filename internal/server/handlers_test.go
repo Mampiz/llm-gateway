@@ -48,8 +48,17 @@ func okResponse() *provider.ChatResponse {
 // newTestHandler builds the full handler chain, middleware included, with a
 // logger that goes nowhere so test output stays readable.
 func newTestHandler(p provider.Provider) http.Handler {
+	reg := provider.NewRegistry()
+	reg.Register(p)
+	if err := reg.SetDefault(p.Name()); err != nil {
+		panic(err)
+	}
+	return newTestHandlerWith(reg)
+}
+
+func newTestHandlerWith(reg *provider.Registry) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(p, logger, time.Second, "test").Handler()
+	return New(reg, logger, time.Second, "test").Handler()
 }
 
 // do sends one request through the handler and returns the recorded response.
@@ -70,24 +79,32 @@ func succeedingProvider() *stubProvider {
 }
 
 func TestHealthz(t *testing.T) {
-	rec := do(newTestHandler(&stubProvider{name: "openai"}), http.MethodGet, "/healthz", "")
+	reg := provider.NewRegistry()
+	reg.Register(&stubProvider{name: "openai"}, "gpt-")
+	reg.Register(&stubProvider{name: "anthropic"}, "claude-")
+
+	rec := do(newTestHandlerWith(reg), http.MethodGet, "/healthz", "")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
-	var got map[string]string
+	var got struct {
+		Status    string   `json:"status"`
+		Version   string   `json:"version"`
+		Providers []string `json:"providers"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("response is not JSON: %v", err)
 	}
-	if got["status"] != "ok" {
-		t.Errorf("status field = %q, want ok", got["status"])
+	if got.Status != "ok" {
+		t.Errorf("status = %q, want ok", got.Status)
 	}
-	if got["provider"] != "openai" {
-		t.Errorf("provider field = %q, want openai", got["provider"])
+	if got.Version != "test" {
+		t.Errorf("version = %q, want test", got.Version)
 	}
-	if got["version"] != "test" {
-		t.Errorf("version field = %q, want test", got["version"])
+	if len(got.Providers) != 2 {
+		t.Errorf("providers = %v, want both registered ones listed", got.Providers)
 	}
 }
 
@@ -165,7 +182,6 @@ func TestChatCompletions_RejectsBadRequests(t *testing.T) {
 		{"missing model", `{"messages":[{"role":"user","content":"hi"}]}`, http.StatusBadRequest},
 		{"empty messages", `{"model":"gpt-4o-mini","messages":[]}`, http.StatusBadRequest},
 		{"no messages field", `{"model":"gpt-4o-mini"}`, http.StatusBadRequest},
-		{"unknown field", `{"model":"m","messages":[{"role":"user","content":"hi"}],"nope":1}`, http.StatusBadRequest},
 		{"streaming not implemented yet", `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`, http.StatusNotImplemented},
 	}
 
@@ -194,6 +210,100 @@ func TestChatCompletions_RejectsBadRequests(t *testing.T) {
 				t.Error("error type is empty")
 			}
 		})
+	}
+}
+
+// TestChatCompletions_KeepsUnknownFields is the other half of dropping
+// DisallowUnknownFields: what the gateway does not model must survive in Extra
+// instead of being silently discarded at the door.
+func TestChatCompletions_KeepsUnknownFields(t *testing.T) {
+	var got provider.ChatRequest
+	p := &stubProvider{chat: func(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+		got = req
+		return okResponse(), nil
+	}}
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"top_p":0.9,"presence_penalty":1,"user":"u-42"}`
+	if rec := do(newTestHandler(p), http.MethodPost, "/v1/chat/completions", body); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: real SDKs send fields we do not model (body: %s)", rec.Code, rec.Body)
+	}
+
+	if got.Extra == nil {
+		t.Fatal("Extra is nil, want the unmodelled fields preserved")
+	}
+	for _, k := range []string{"top_p", "presence_penalty", "user"} {
+		if _, ok := got.Extra[k]; !ok {
+			t.Errorf("Extra is missing %q: %v", k, got.Extra)
+		}
+	}
+	// Fields the schema does model must not be duplicated into Extra.
+	for _, k := range []string{"model", "messages"} {
+		if _, ok := got.Extra[k]; ok {
+			t.Errorf("Extra contains modelled field %q", k)
+		}
+	}
+}
+
+func TestChatCompletions_NoExtraWhenNothingUnknown(t *testing.T) {
+	var got provider.ChatRequest
+	p := &stubProvider{chat: func(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+		got = req
+		return okResponse(), nil
+	}}
+
+	do(newTestHandler(p), http.MethodPost, "/v1/chat/completions", validBody)
+
+	if got.Extra != nil {
+		t.Errorf("Extra = %v, want nil when every field is modelled", got.Extra)
+	}
+}
+
+// TestChatCompletions_RoutesByModel proves the provider is chosen per request
+// from the model name rather than fixed at startup.
+func TestChatCompletions_RoutesByModel(t *testing.T) {
+	var served string
+	record := func(name string) *stubProvider {
+		return &stubProvider{name: name, chat: func(context.Context, provider.ChatRequest) (*provider.ChatResponse, error) {
+			served = name
+			return okResponse(), nil
+		}}
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(record("openai"), "gpt-")
+	reg.Register(record("anthropic"), "claude-")
+	h := newTestHandlerWith(reg)
+
+	tests := []struct{ model, want string }{
+		{"gpt-4o-mini", "openai"},
+		{"claude-sonnet-5", "anthropic"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			served = ""
+			body := `{"model":"` + tt.model + `","messages":[{"role":"user","content":"hi"}]}`
+			if rec := do(h, http.MethodPost, "/v1/chat/completions", body); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+			}
+			if served != tt.want {
+				t.Errorf("model %q was served by %q, want %q", tt.model, served, tt.want)
+			}
+		})
+	}
+}
+
+func TestChatCompletions_UnroutableModel(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.Register(&stubProvider{name: "openai", chat: func(context.Context, provider.ChatRequest) (*provider.ChatResponse, error) {
+		t.Error("provider was called for a model it does not serve")
+		return okResponse(), nil
+	}}, "gpt-")
+
+	body := `{"model":"llama-3","messages":[{"role":"user","content":"hi"}]}`
+	rec := do(newTestHandlerWith(reg), http.MethodPost, "/v1/chat/completions", body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a model no provider serves", rec.Code)
 	}
 }
 

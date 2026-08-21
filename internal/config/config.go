@@ -26,6 +26,17 @@ type Config struct {
 	// OpenAIBaseURL overrides the OpenAI API root. Empty means the default.
 	OpenAIBaseURL string
 
+	// AnthropicAPIKey enables the Anthropic provider when set.
+	AnthropicAPIKey string
+
+	// AnthropicBaseURL overrides the Anthropic API root.
+	AnthropicBaseURL string
+
+	// AnthropicMaxTokens is the limit sent when a request does not specify
+	// one. Anthropic requires the field; the gateway supplies a default so a
+	// request valid for an OpenAI model stays valid for a Claude one.
+	AnthropicMaxTokens int
+
 	// RequestTimeout bounds a single non-streaming completion. It is applied
 	// as a context deadline, never as an http.Client.Timeout.
 	RequestTimeout time.Duration
@@ -37,10 +48,15 @@ type Config struct {
 // Load reads the environment and validates it.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Addr:           env("GATEWAY_ADDR", ":8080"),
-		Provider:       env("GATEWAY_PROVIDER", "mock"),
-		OpenAIAPIKey:   env("OPENAI_API_KEY", ""),
-		OpenAIBaseURL:  env("OPENAI_BASE_URL", ""),
+		Addr:          env("GATEWAY_ADDR", ":8080"),
+		Provider:      env("GATEWAY_PROVIDER", "mock"),
+		OpenAIAPIKey:  env("OPENAI_API_KEY", ""),
+		OpenAIBaseURL: env("OPENAI_BASE_URL", ""),
+
+		AnthropicAPIKey:    env("ANTHROPIC_API_KEY", ""),
+		AnthropicBaseURL:   env("ANTHROPIC_BASE_URL", ""),
+		AnthropicMaxTokens: envInt("ANTHROPIC_DEFAULT_MAX_TOKENS", 4096),
+
 		RequestTimeout: envDuration("GATEWAY_REQUEST_TIMEOUT", 60*time.Second),
 		LogLevel:       env("GATEWAY_LOG_LEVEL", "info"),
 	}
@@ -51,8 +67,12 @@ func Load() (*Config, error) {
 		if cfg.OpenAIAPIKey == "" {
 			return nil, fmt.Errorf("GATEWAY_PROVIDER=openai requires OPENAI_API_KEY to be set")
 		}
+	case "anthropic":
+		if cfg.AnthropicAPIKey == "" {
+			return nil, fmt.Errorf("GATEWAY_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set")
+		}
 	default:
-		return nil, fmt.Errorf("unknown GATEWAY_PROVIDER %q (want \"openai\" or \"mock\")", cfg.Provider)
+		return nil, fmt.Errorf("unknown GATEWAY_PROVIDER %q (want \"openai\", \"anthropic\" or \"mock\")", cfg.Provider)
 	}
 
 	return cfg, nil
@@ -61,6 +81,13 @@ func Load() (*Config, error) {
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
 	}
 	return fallback
 }
