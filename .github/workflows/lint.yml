@@ -14,8 +14,8 @@ jobs:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
           cache: true
@@ -30,14 +30,20 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           args: --timeout=5m
 
+      # Naming go.sum explicitly breaks while the module still has no
+      # dependencies, because git refuses a pathspec that does not exist.
+      # Checking the whole tree works either way, and on a fresh checkout any
+      # diff at all is a real problem.
       - name: go.mod is tidy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum || {
-            echo "go.mod/go.sum are not tidy; run 'go mod tidy'"; exit 1;
-          }
+          if ! git diff --quiet; then
+            echo "go.mod/go.sum are not tidy; run 'go mod tidy'"
+            git diff
+            exit 1
+          fi
