@@ -8,3 +8,4 @@
 # Go
 *.test
 *.out
+coverage.out

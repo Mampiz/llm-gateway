@@ -21,6 +21,19 @@ curl -sS localhost:8080/v1/chat/completions \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"say hi"}]}'
 ```
 
+## Testing
+
+```bash
+make test        # full suite
+make test-race   # same, under the race detector
+make cover       # coverage profile + total
+make ci          # everything the pipeline runs: lint, race, build
+```
+
+Tests use `httptest.NewServer`, so the whole `net/http` stack is exercised
+against a real loopback listener. No API key and no network access are needed,
+and nothing is billed.
+
 ## Layout
 
 ```

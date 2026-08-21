@@ -103,7 +103,6 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 	// back to the Transport's pool.
 	defer httpResp.Body.Close()
 
-
 	if httpResp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxErrorBody))
 
@@ -113,7 +112,7 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 			msg = env.Error.Message
 		}
 		if msg == "" {
-			msg = httpResp.Status 
+			msg = httpResp.Status
 		}
 
 		return nil, &provider.Error{
