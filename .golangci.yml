@@ -1,0 +1,53 @@
+version: "2"
+
+linters:
+  enable:
+    # Correctness
+    - errcheck      # unchecked errors
+    - govet         # the standard vet suite
+    - staticcheck   # the largest catalogue of real bugs and dead code
+    - ineffassign   # assignments whose value is never used
+    - unused        # unused code
+    - bodyclose     # HTTP response bodies that are never closed
+    - noctx         # HTTP requests built without a context
+    - errorlint     # == on errors instead of errors.Is/As
+    - contextcheck  # functions that drop the context they were given
+    - nilerr        # returning nil when err is non-nil
+    - rowserrcheck
+    - makezero
+
+    # Style and clarity
+    - revive        # golint's successor
+    - misspell
+    - unconvert     # redundant type conversions
+    - godot         # comments end with a period
+    - goconst       # repeated string literals that want a constant
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true  # unexported internal packages do not need doc on every symbol
+    errcheck:
+      # Closing a response body or encoding to an http.ResponseWriter has no
+      # useful error handling; these are explicitly ignored in the code.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+
+  exclusions:
+    rules:
+      # Tests may be repetitive and may ignore errors that matter in prod.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - goconst
+          - godot
+          # Test requests are handed straight to a handler; there is no
+          # outbound call whose context could be cancelled.
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

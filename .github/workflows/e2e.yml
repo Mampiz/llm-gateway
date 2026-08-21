@@ -1,0 +1,26 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      # Compiles the real binary, starts it against fake upstreams and talks
+      # to it over a real socket, the way a client would.
+      - name: End-to-end suite
+        run: go test -tags e2e ./test/e2e/ -count=1 -v

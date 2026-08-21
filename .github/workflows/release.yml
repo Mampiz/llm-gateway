@@ -1,4 +1,4 @@
-name: Release
+name: Release image
 
 # Publishing is driven by tags: `git tag v0.2.0 && git push origin v0.2.0`
 # builds the binaries, publishes the container image and drafts the notes.
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   binaries:
-    name: Build binaries
+    name: build-binaries
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -49,14 +49,19 @@ jobs:
             -o "dist/$name" ./cmd/gateway
           tar -czf "llm-gateway_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}.tar.gz" -C dist "$name"
 
+      - name: Checksums
+        run: sha256sum llm-gateway_*.tar.gz > "checksums_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}.txt"
+
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: llm-gateway_*.tar.gz
+          files: |
+            llm-gateway_*.tar.gz
+            checksums_*.txt
           generate_release_notes: true
 
   image:
-    name: Publish container image
+    name: build-and-push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,3 +99,8 @@ jobs:
           build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Ship a software bill of materials and build provenance alongside
+          # the image, so consumers can see what is inside it and verify where
+          # it came from.
+          sbom: true
+          provenance: mode=max
