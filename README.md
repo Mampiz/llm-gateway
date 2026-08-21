@@ -54,6 +54,29 @@ curl -sS localhost:8080/v1/chat/completions \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"say hi"}]}'
 ```
 
+## Local development
+
+No API key, no network, no bill: a fake upstream in `cmd/fakeupstream` speaks
+both dialects at once.
+
+```bash
+make dev     # gateway + fake upstream, left running to poke at by hand
+make smoke   # start everything, check every route, tear it down again
+```
+
+`make smoke` is the one-command answer to "does it actually work": it builds
+both binaries, wires them together, drives twenty checks through the real HTTP
+surface — routing, translation, validation, upstream failures — prints a
+pass/fail line for each, and cleans up after itself.
+
+The fake can also misbehave on request, which is how failure paths get
+exercised:
+
+```bash
+go run ./cmd/fakeupstream -fail 429      # every call is rate limited
+go run ./cmd/fakeupstream -latency 5s    # slow enough to trip timeouts
+```
+
 ## Testing
 
 ```bash
@@ -121,9 +144,13 @@ to a GitHub release with generated notes, and publishes a multi-arch image to
 
 ```
 cmd/gateway         entrypoint: config, wiring, graceful shutdown
+cmd/fakeupstream    offline stand-in for both vendor APIs
 internal/config     environment loading and validation
 internal/server     routing, middleware, HTTP handlers
 internal/provider   the Provider interface and the shared schema
   ├── openai       OpenAI-compatible client
+  ├── anthropic    Messages API client and its translation layer
   └── mock         offline fake provider
+scripts/            dev.sh and smoke.sh
+test/e2e            end-to-end suite (build tag: e2e)
 ```

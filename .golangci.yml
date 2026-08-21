@@ -38,6 +38,12 @@ linters:
   exclusions:
     rules:
       # Tests may be repetitive and may ignore errors that matter in prod.
+      # A stand-in for a vendor API is literal wire JSON by nature; naming its
+      # keys as constants would make it harder to compare against the spec.
+      - path: cmd/fakeupstream/
+        linters:
+          - goconst
+
       - path: _test\.go
         linters:
           - errcheck

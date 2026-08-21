@@ -1,4 +1,12 @@
-.PHONY: run build test test-race e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci smoke help  build-image
+# Running `make` with no target must never start a long-lived process: build
+# tools and code scanners invoke a bare `make` and would hang forever waiting
+# for a server to "finish compiling". CodeQL's autobuilder did exactly that.
+.DEFAULT_GOAL := build
+
+.PHONY: all run build build-image test test-race e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci dev fake smoke help
+
+## all: alias for build, the conventional default
+all: build
 
 ## run: start the gateway with .env loaded if present
 run:
@@ -74,11 +82,17 @@ tidy:
 ## ci: everything the pipeline runs, locally
 ci: lint test-race e2e vuln build
 
-## smoke: send one request to a gateway already running on :8080
+## smoke: start everything, check every route, tear it down again
 smoke:
-	curl -sS localhost:8080/v1/chat/completions \
-		-H 'Content-Type: application/json' \
-		-d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"say hi"}]}' | jq .
+	@./scripts/smoke.sh
+
+## dev: run the gateway against a fake upstream and leave both up
+dev:
+	@./scripts/dev.sh
+
+## fake: run just the fake upstream (-fail 429 and -latency 5s also work)
+fake:
+	go run ./cmd/fakeupstream
 
 ## help: list the available targets
 help:

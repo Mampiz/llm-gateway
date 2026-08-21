@@ -21,14 +21,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+
       - uses: github/codeql-action/init@v4
         with:
           languages: go
+          build-mode: manual
           # security-and-quality adds maintainability rules on top of the
           # default security queries.
           queries: security-and-quality
 
-      - uses: github/codeql-action/autobuild@v4
+      # Explicit build instead of autobuild. The autobuilder guesses, and its
+      # guess for a repo with a Makefile is to run a bare `make` -- which is
+      # not necessarily a build at all. Two lines of certainty beat a guess.
+      - name: Build
+        run: go build ./...
 
       - uses: github/codeql-action/analyze@v4
         with:
