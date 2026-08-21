@@ -1,0 +1,8 @@
+.git
+.github
+bin
+coverage.out
+.env
+*_test.go
+README.md
+Makefile

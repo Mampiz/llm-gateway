@@ -18,6 +18,10 @@ import (
 	"github.com/Mampiz/llm-gateway/internal/server"
 )
 
+// version is stamped at build time with -ldflags "-X main.version=...".
+// It stays "dev" for local builds.
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "error", err)
@@ -45,7 +49,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: server.New(p, logger, cfg.RequestTimeout).Handler(),
+		Handler: server.New(p, logger, cfg.RequestTimeout, version).Handler(),
 
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -67,7 +71,7 @@ func run() error {
 	// channel, and an unbuffered send would block that goroutine forever.
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("gateway listening", "addr", cfg.Addr, "provider", p.Name())
+		logger.Info("gateway listening", "addr", cfg.Addr, "provider", p.Name(), "version", version)
 		errCh <- srv.ListenAndServe()
 	}()
 

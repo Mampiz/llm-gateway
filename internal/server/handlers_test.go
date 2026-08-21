@@ -49,7 +49,7 @@ func okResponse() *provider.ChatResponse {
 // logger that goes nowhere so test output stays readable.
 func newTestHandler(p provider.Provider) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(p, logger, time.Second).Handler()
+	return New(p, logger, time.Second, "test").Handler()
 }
 
 // do sends one request through the handler and returns the recorded response.
@@ -85,6 +85,9 @@ func TestHealthz(t *testing.T) {
 	}
 	if got["provider"] != "openai" {
 		t.Errorf("provider field = %q, want openai", got["provider"])
+	}
+	if got["version"] != "test" {
+		t.Errorf("version field = %q, want test", got["version"])
 	}
 }
 

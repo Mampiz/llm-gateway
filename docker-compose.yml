@@ -1,0 +1,18 @@
+services:
+  gateway:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_ADDR: ":8080"
+      GATEWAY_PROVIDER: ${GATEWAY_PROVIDER:-mock}
+      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-info}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    restart: unless-stopped
+
+  # Redis arrives in phase 4 for the distributed rate limiter and in phase 6
+  # for the response cache.

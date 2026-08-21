@@ -16,11 +16,16 @@ type Server struct {
 	provider       provider.Provider
 	logger         *slog.Logger
 	requestTimeout time.Duration
+	version        string
 }
 
-// New builds a Server.
-func New(p provider.Provider, logger *slog.Logger, requestTimeout time.Duration) *Server {
-	return &Server{provider: p, logger: logger, requestTimeout: requestTimeout}
+// New builds a Server. version is reported by /healthz so a deployed instance
+// can be identified without shelling into it.
+func New(p provider.Provider, logger *slog.Logger, requestTimeout time.Duration, version string) *Server {
+	if version == "" {
+		version = "dev"
+	}
+	return &Server{provider: p, logger: logger, requestTimeout: requestTimeout, version: version}
 }
 
 // Handler returns the fully decorated http.Handler for the gateway.
