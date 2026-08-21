@@ -10,6 +10,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -75,7 +76,13 @@ type Error struct {
 	Provider   string
 	StatusCode int    // HTTP status returned by the vendor, 0 if the call never completed
 	Message    string // vendor-supplied error message, or the transport error
+	Err        error  // underlying cause, if any; may be nil
 }
+
+// Unwrap exposes the cause to errors.Is and errors.As, so that wrapping a
+// context error in an *Error does not hide it from callers testing for
+// context.Canceled or context.DeadlineExceeded.
+func (e *Error) Unwrap() error { return e.Err }
 
 func (e *Error) Error() string {
 	if e.StatusCode == 0 {
@@ -87,6 +94,10 @@ func (e *Error) Error() string {
 // Retryable reports whether the same request could plausibly succeed on a
 // different provider or a later attempt.
 func (e *Error) Retryable() bool {
+	// The caller gave up or ran out of time: another attempt helps nobody.
+	if errors.Is(e.Err, context.Canceled) || errors.Is(e.Err, context.DeadlineExceeded) {
+		return false
+	}
 	switch {
 	case e.StatusCode == 0: // transport error: connection refused, timeout, DNS
 		return true

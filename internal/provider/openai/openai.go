@@ -3,9 +3,13 @@
 package openai
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Mampiz/llm-gateway/internal/provider"
@@ -53,13 +57,89 @@ func New(apiKey, baseURL string, httpClient *http.Client) *Client {
 // Name implements provider.Provider.
 func (c *Client) Name() string { return "openai" }
 
+// maxErrorBody caps how much of a failed response we read. A misbehaving
+// upstream must not be able to make the gateway allocate without bound.
+const maxErrorBody = 8 << 10 // 8 KiB
+
+// errorEnvelope is the shape OpenAI wraps its failures in. It stays
+// unexported because it is vendor-specific wire format: in phase 2 Anthropic
+// will bring its own, and neither belongs in the shared provider package.
+type errorEnvelope struct {
+	Error struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
 // Chat implements provider.Provider.
-//
-// TODO(phase 1): this is your mission. Build the outgoing request from req,
-// send it, and turn the response into a *provider.ChatResponse (or a
-// *provider.Error when the upstream rejects the call).
 func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
-	_ = ctx
-	_ = req
-	return nil, errors.New("openai: Chat is not implemented yet")
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: build request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	// Do returns an error only when the exchange never completed
+	// (DNS, refused connection, cancelled context). An HTTP 429 or 500 is a
+	// *successful* Do with an unhappy status code, handled below.
+	httpResp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, &provider.Error{
+			Provider: c.Name(),
+			Message:  err.Error(),
+			Err:      err,
+		}
+	}
+
+	// close on every return path, or the TCP connection never goes
+	// back to the Transport's pool.
+	defer httpResp.Body.Close()
+
+
+	if httpResp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxErrorBody))
+
+		msg := strings.TrimSpace(string(raw))
+		var env errorEnvelope
+		if err := json.Unmarshal(raw, &env); err == nil && env.Error.Message != "" {
+			msg = env.Error.Message
+		}
+		if msg == "" {
+			msg = httpResp.Status 
+		}
+
+		return nil, &provider.Error{
+			Provider:   c.Name(),
+			StatusCode: httpResp.StatusCode,
+			Message:    msg,
+		}
+	}
+
+	var out provider.ChatResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&out); err != nil {
+		return nil, &provider.Error{
+			Provider:   c.Name(),
+			StatusCode: httpResp.StatusCode,
+			Message:    "malformed response body: " + err.Error(),
+			Err:        err,
+		}
+	}
+
+	if len(out.Choices) == 0 {
+		return nil, &provider.Error{
+			Provider:   c.Name(),
+			StatusCode: httpResp.StatusCode,
+			Message:    "upstream returned no choices",
+		}
+	}
+
+	return &out, nil
 }
