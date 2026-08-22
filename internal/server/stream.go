@@ -135,11 +135,10 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p
 				return
 			}
 			if !writeSSE(w, rc, payload) {
-				// The client is gone. Returning runs the deferred Close, which
-				// tears down the upstream call and stops the meter.
+				// The client is gone. Returning cancels the context, which is
+				// what tears down the upstream call and stops the meter.
 				return
 			}
-			writeSSEComment(w, rc)
 
 		case <-idleTimer.C:
 			cancel()
