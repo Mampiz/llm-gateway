@@ -9,6 +9,7 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -324,7 +325,6 @@ func TestBadRequestsAreRejected(t *testing.T) {
 		{"malformed JSON", `{"model":`, http.StatusBadRequest},
 		{"no model", `{"messages":[{"role":"user","content":"hi"}]}`, http.StatusBadRequest},
 		{"no messages", `{"model":"mock-1"}`, http.StatusBadRequest},
-		{"streaming not implemented yet", `{"model":"mock-1","messages":[{"role":"user","content":"hi"}],"stream":true}`, http.StatusNotImplemented},
 	}
 
 	for _, tt := range tests {
@@ -334,6 +334,97 @@ func TestBadRequestsAreRejected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStreamsThroughTheBinary drives a real SSE stream end to end: the fake
+// upstream emits vendor frames, the gateway translates them, and the client
+// reads them off the socket as they arrive.
+func TestStreamsThroughTheBinary(t *testing.T) {
+	base := gateway(t, map[string]string{
+		"OPENAI_API_KEY":  "sk-e2e",
+		"OPENAI_BASE_URL": fakeStreamingOpenAI(t),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	var text strings.Builder
+	var sawDone bool
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			sawDone = true
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			t.Fatalf("frame is not JSON: %v (%s)", err, payload)
+		}
+		if len(chunk.Choices) > 0 {
+			text.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+
+	if !sawDone {
+		t.Error("the stream never reached [DONE]")
+	}
+	if !strings.Contains(text.String(), "hello there") {
+		t.Errorf("assembled text = %q, want the upstream answer", text.String())
+	}
+}
+
+// fakeStreamingOpenAI emits an OpenAI SSE stream, flushing each frame.
+func fakeStreamingOpenAI(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+
+		const head = `"id":"chatcmpl-e2e","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini"`
+		for _, word := range []string{"hello ", "there"} {
+			fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q},\"finish_reason\":null}]}\n\n", head, word)
+			_ = rc.Flush()
+		}
+		fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", head)
+		_ = rc.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		_ = rc.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 // TestStartupFailsOnBadConfig proves the binary refuses to run half-configured

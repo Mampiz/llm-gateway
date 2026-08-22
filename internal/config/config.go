@@ -41,6 +41,17 @@ type Config struct {
 	// as a context deadline, never as an http.Client.Timeout.
 	RequestTimeout time.Duration
 
+	// StreamIdleTimeout bounds how long a stream may go without producing a
+	// single chunk before the gateway gives up. Unlike RequestTimeout it is
+	// not a budget for the whole answer: it resets on every chunk, so a long
+	// generation is fine as long as it keeps moving.
+	StreamIdleTimeout time.Duration
+
+	// StreamHeartbeat is how often an idle stream emits an SSE comment, so
+	// that proxies and load balancers do not drop a connection that is merely
+	// waiting for the model to think.
+	StreamHeartbeat time.Duration
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
@@ -58,7 +69,11 @@ func Load() (*Config, error) {
 		AnthropicMaxTokens: envInt("ANTHROPIC_DEFAULT_MAX_TOKENS", 4096),
 
 		RequestTimeout: envDuration("GATEWAY_REQUEST_TIMEOUT", 60*time.Second),
-		LogLevel:       env("GATEWAY_LOG_LEVEL", "info"),
+
+		StreamIdleTimeout: envDuration("GATEWAY_STREAM_IDLE_TIMEOUT", 60*time.Second),
+		StreamHeartbeat:   envDuration("GATEWAY_STREAM_HEARTBEAT", 15*time.Second),
+
+		LogLevel: env("GATEWAY_LOG_LEVEL", "info"),
 	}
 
 	switch cfg.Provider {

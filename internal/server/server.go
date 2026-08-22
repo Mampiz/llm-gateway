@@ -17,6 +17,12 @@ type Server struct {
 	logger         *slog.Logger
 	requestTimeout time.Duration
 	version        string
+
+	// streamIdle and streamHeartbeat govern a streaming response. Neither can
+	// be honoured by a loop that simply blocks on the next chunk, which is
+	// what forces the streaming handler to multiplex.
+	streamIdle      time.Duration
+	streamHeartbeat time.Duration
 }
 
 // New builds a Server. The registry, not a single provider, is injected: from
@@ -25,7 +31,26 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 	if version == "" {
 		version = "dev"
 	}
-	return &Server{registry: reg, logger: logger, requestTimeout: requestTimeout, version: version}
+	return &Server{
+		registry:        reg,
+		logger:          logger,
+		requestTimeout:  requestTimeout,
+		version:         version,
+		streamIdle:      60 * time.Second,
+		streamHeartbeat: 15 * time.Second,
+	}
+}
+
+// WithStreamTimings overrides the streaming durations. Zero or negative values
+// leave the current one untouched.
+func (s *Server) WithStreamTimings(idle, heartbeat time.Duration) *Server {
+	if idle > 0 {
+		s.streamIdle = idle
+	}
+	if heartbeat > 0 {
+		s.streamHeartbeat = heartbeat
+	}
+	return s
 }
 
 // Handler returns the fully decorated http.Handler for the gateway.

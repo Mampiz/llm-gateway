@@ -49,7 +49,6 @@ const (
 // same contract, backed by a slice instead of a socket.
 
 // ChatStream implements provider.Provider.
-//
 func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (provider.Stream, error) {
 
 	var outReq = req

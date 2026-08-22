@@ -54,14 +54,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "field \"messages\" must not be empty")
 		return
 	}
-	if req.Stream {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "streaming arrives in phase 3")
-		return
-	}
-
 	p, err := s.registry.For(req.Model)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+
+	if req.Stream {
+		s.streamChatCompletions(w, r, p, req)
 		return
 	}
 

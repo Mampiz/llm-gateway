@@ -190,7 +190,6 @@ func TestChatCompletions_RejectsBadRequests(t *testing.T) {
 		{"missing model", `{"messages":[{"role":"user","content":"hi"}]}`, http.StatusBadRequest},
 		{"empty messages", `{"model":"gpt-4o-mini","messages":[]}`, http.StatusBadRequest},
 		{"no messages field", `{"model":"gpt-4o-mini"}`, http.StatusBadRequest},
-		{"streaming not implemented yet", `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`, http.StatusNotImplemented},
 	}
 
 	for _, tt := range tests {

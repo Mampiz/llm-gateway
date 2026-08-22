@@ -47,8 +47,10 @@ func run() error {
 	}
 
 	srv := &http.Server{
-		Addr:    cfg.Addr,
-		Handler: server.New(reg, logger, cfg.RequestTimeout, version).Handler(),
+		Addr: cfg.Addr,
+		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
+			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
+			Handler(),
 
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

@@ -129,10 +129,17 @@ echo "== validacion =="
 check "JSON malformado -> 400"          400 "${CT[@]}" -d '{"model":' "${GW}/v1/chat/completions"
 check "sin model -> 400"                400 "${CT[@]}" -d '{"messages":[{"role":"user","content":"h"}]}' "${GW}/v1/chat/completions"
 check "sin messages -> 400"             400 "${CT[@]}" -d '{"model":"gpt-4o"}' "${GW}/v1/chat/completions"
-check "stream:true -> 501"              501 "${CT[@]}" -d '{"model":"gpt-4o","messages":[{"role":"user","content":"h"}],"stream":true}' "${GW}/v1/chat/completions"
 check "campos desconocidos aceptados"   200 "${CT[@]}" -d '{"model":"gpt-4o","messages":[{"role":"user","content":"h"}],"top_p":0.9,"presence_penalty":1}' "${GW}/v1/chat/completions"
 check "GET en el endpoint -> 405"       405 "${GW}/v1/chat/completions"
 check "ruta inexistente -> 404"         404 "${GW}/nope"
+
+echo
+echo "== streaming =="
+STREAM_REQ='{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hola"}]}'
+check    "stream devuelve 200"             200 "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
+contains "emite tramas SSE"                "data: " "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
+contains "termina con [DONE]"              "[DONE]" "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
+contains "el texto llega en deltas"        '"delta"' "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
 
 echo
 echo "== propagacion de errores del upstream =="
