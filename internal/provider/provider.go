@@ -116,6 +116,11 @@ type Chunk struct {
 // Nothing here requires a goroutine. When the caller needs to wait on a chunk
 // and on something else at the same time, it wraps the stream itself -- once,
 // in one place, rather than in every vendor package.
+//
+// A Stream is NOT safe for concurrent use. Whichever goroutine calls Next owns
+// it and is the one that must Close it; a second goroutine calling Close while
+// the first is inside Next is a data race. To stop a stream from elsewhere,
+// cancel the context it was created with and let its owner unwind.
 type Stream interface {
 	// Next advances to the next chunk, reporting whether one arrived. It
 	// returns false at the end of the stream and on error alike.

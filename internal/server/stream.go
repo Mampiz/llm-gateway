@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,7 +49,10 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p
 	// path: a total timeout would cut a long generation short. What this
 	// wants instead is an idle timeout, which a sequential loop cannot
 	// express.
-	stream, err := p.ChatStream(r.Context(), req)
+	streamCtx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	stream, err := p.ChatStream(streamCtx, req)
 	if err != nil {
 		if errors.Is(err, provider.ErrStreamingNotSupported) {
 			writeError(w, http.StatusNotImplemented, "not_implemented",
@@ -58,9 +62,6 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p
 		s.writeProviderError(w, r, p.Name(), err)
 		return
 	}
-	// Closing tears down the upstream call. Its error has nowhere useful to
-	// go: the response is either already sent or already broken.
-	defer func() { _ = stream.Close() }()
 
 	// Past this point the status is committed and cannot be revised.
 	h := w.Header()
@@ -79,36 +80,79 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p
 
 	created := time.Now().Unix()
 
-	for stream.Next() {
-		frame := toStreamFrame(stream.Current(), created)
+	ch := make(chan provider.Chunk, 8)
+	errCh := make(chan error, 1)
 
-		payload, err := json.Marshal(frame)
-		if err != nil {
-			s.logger.Error("encoding stream frame", "error", err,
-				"request_id", RequestIDFrom(r.Context()))
-			return
+	go func() {
+		defer close(ch)
+		// The stream is owned by this goroutine alone. Next, Current and
+		// Close all run here, so there is nothing to synchronise: the handler
+		// stops it by cancelling the context, never by touching it directly.
+		defer func() { _ = stream.Close() }()
+
+		for stream.Next() {
+			select {
+			case ch <- stream.Current():
+			case <-streamCtx.Done():
+				errCh <- streamCtx.Err()
+				return
+			}
 		}
-		if !writeSSE(w, rc, payload) {
-			// The client is gone. Returning runs the deferred Close, which
-			// tears down the upstream call and stops the meter.
+		errCh <- stream.Err()
+	}()
+
+	idleTimer := time.NewTimer(s.streamIdle)
+	defer idleTimer.Stop()
+	heartbeat := time.NewTicker(s.streamHeartbeat)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case chunk, ok := <-ch:
+			if !ok {
+				if err := <-errCh; err != nil {
+					writeSSEError(w, rc, err)
+					return
+				}
+				writeSSEDone(w, rc)
+				return
+			}
+
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(s.streamIdle)
+
+			frame := toStreamFrame(chunk, created)
+
+			payload, err := json.Marshal(frame)
+			if err != nil {
+				s.logger.Error("encoding stream frame", "error", err,
+					"request_id", RequestIDFrom(r.Context()))
+				return
+			}
+			if !writeSSE(w, rc, payload) {
+				// The client is gone. Returning runs the deferred Close, which
+				// tears down the upstream call and stops the meter.
+				return
+			}
+			writeSSEComment(w, rc)
+
+		case <-idleTimer.C:
+			cancel()
+			writeSSEError(w, rc, context.DeadlineExceeded)
 			return
+
+		case <-heartbeat.C:
+			if !writeSSEComment(w, rc) {
+				return
+			}
 		}
 	}
 
-	if err := stream.Err(); err != nil {
-		s.logger.Error("stream failed midway",
-			"provider", p.Name(),
-			"error", err,
-			"request_id", RequestIDFrom(r.Context()),
-		)
-		// The 200 is long gone, so the only place left to report this is the
-		// stream itself. Deliberately no [DONE] afterwards: that sentinel
-		// means "complete answer", and this answer is not one.
-		writeSSEError(w, rc, err)
-		return
-	}
-
-	writeSSEDone(w, rc)
 }
 
 // toStreamFrame maps a canonical chunk onto the wire frame.
@@ -171,4 +215,16 @@ func writeSSEDone(w io.Writer, rc *http.ResponseController) {
 		return
 	}
 	_ = rc.Flush()
+}
+
+// writeSSEComment emits an SSE comment, the standard keep-alive. Clients
+// ignore it by specification, so it never reaches the application: its only
+// job is to prove the connection is alive to whatever sits in between.
+func writeSSEComment(w io.Writer, rc *http.ResponseController) bool {
+	if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+		return false
+	}
+	// A failed flush is not worth acting on: the next write will fail too.
+	_ = rc.Flush()
+	return true
 }
