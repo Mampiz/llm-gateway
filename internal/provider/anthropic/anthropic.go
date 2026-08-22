@@ -157,3 +157,12 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 	}
 	return resp, nil
 }
+
+// ChatStream implements provider.Provider.
+//
+// TODO(phase 3): Anthropic streaming lands once the OpenAI one works, since
+// the two share the SSE framing and differ only in event vocabulary.
+func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (provider.Stream, error) {
+	_, _ = ctx, req
+	return nil, provider.ErrStreamingNotSupported
+}

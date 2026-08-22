@@ -13,6 +13,10 @@ func (f fake) Chat(context.Context, ChatRequest) (*ChatResponse, error) {
 	return &ChatResponse{Model: f.name}, nil
 }
 
+func (f fake) ChatStream(context.Context, ChatRequest) (Stream, error) {
+	return nil, ErrStreamingNotSupported
+}
+
 func TestRegistry_RoutesByPrefix(t *testing.T) {
 	oa := fake{"openai"}
 	an := fake{"anthropic"}

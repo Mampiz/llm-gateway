@@ -18,8 +18,9 @@ import (
 // stubProvider is a test double: the behaviour of every case is injected as a
 // function, so one type covers success, every failure mode and even a panic.
 type stubProvider struct {
-	name string
-	chat func(context.Context, provider.ChatRequest) (*provider.ChatResponse, error)
+	name   string
+	chat   func(context.Context, provider.ChatRequest) (*provider.ChatResponse, error)
+	stream func(context.Context, provider.ChatRequest) (provider.Stream, error)
 }
 
 func (s *stubProvider) Name() string {
@@ -31,6 +32,13 @@ func (s *stubProvider) Name() string {
 
 func (s *stubProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
 	return s.chat(ctx, req)
+}
+
+func (s *stubProvider) ChatStream(ctx context.Context, req provider.ChatRequest) (provider.Stream, error) {
+	if s.stream == nil {
+		return nil, provider.ErrStreamingNotSupported
+	}
+	return s.stream(ctx, req)
 }
 
 var _ provider.Provider = (*stubProvider)(nil)

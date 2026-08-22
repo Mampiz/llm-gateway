@@ -5,6 +5,7 @@ package mock
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mampiz/llm-gateway/internal/provider"
@@ -53,4 +54,81 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 		}},
 		Usage: provider.Usage{PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18},
 	}, nil
+}
+
+// ChatStream implements provider.Provider. It emits the same answer as Chat,
+// one word at a time.
+//
+// This is also the reference implementation of the Stream contract: the
+// smallest thing that satisfies it correctly, worth reading before writing a
+// real one.
+func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (provider.Stream, error) {
+	var last string
+	if n := len(req.Messages); n > 0 {
+		last = req.Messages[n-1].Content
+	}
+
+	id := "chatcmpl-mock-" + fmt.Sprint(time.Now().UnixNano())
+
+	var chunks []provider.Chunk
+	for _, word := range strings.Fields("mock reply to: " + last) {
+		chunks = append(chunks, provider.Chunk{
+			ID:      id,
+			Model:   req.Model,
+			Content: word + " ",
+		})
+	}
+	// The closing chunk carries no text: the finish reason and the token
+	// counts arrive after the last word, exactly as real vendors send them.
+	chunks = append(chunks, provider.Chunk{
+		ID:           id,
+		Model:        req.Model,
+		FinishReason: "stop",
+		Usage:        &provider.Usage{PromptTokens: 10, CompletionTokens: len(chunks), TotalTokens: 10 + len(chunks)},
+	})
+
+	return &stream{ctx: ctx, chunks: chunks, delay: c.Latency / 4}, nil
+}
+
+// stream is a slice-backed provider.Stream.
+type stream struct {
+	ctx     context.Context
+	chunks  []provider.Chunk
+	next    int
+	current provider.Chunk
+	delay   time.Duration
+	err     error
+}
+
+var _ provider.Stream = (*stream)(nil)
+
+// Next advances to the next chunk. Note the two ways it returns false: the
+// slice ran out (clean end, Err stays nil) or the context was cancelled
+// (Err is set). Distinguishing them is the caller's job, via Err.
+func (s *stream) Next() bool {
+	if s.err != nil || s.next >= len(s.chunks) {
+		return false
+	}
+	if s.delay > 0 {
+		select {
+		case <-time.After(s.delay):
+		case <-s.ctx.Done():
+			s.err = s.ctx.Err()
+			return false
+		}
+	}
+	s.current = s.chunks[s.next]
+	s.next++
+	return true
+}
+
+func (s *stream) Current() provider.Chunk { return s.current }
+
+func (s *stream) Err() error { return s.err }
+
+// Close has nothing to release here, but it still has to exist and stay safe
+// to call twice: callers are meant to `defer stream.Close()` unconditionally.
+func (s *stream) Close() error {
+	s.next = len(s.chunks)
+	return nil
 }
