@@ -206,6 +206,11 @@ section now names the dependency rule the design rests on.
 
 **Verifier** — passing.
 
+Final pass also added integration tests for the Redis cache, which had none:
+serialisation round trip, expiry, corrupt entries reading as a miss, and an
+entry stored by one instance being readable by another. Coverage there went
+from 53.8% to 84.6%.
+
 ## Discarded ideas
 
 - **Semantic caching.** Listed as a bonus in the original plan. Needs an
