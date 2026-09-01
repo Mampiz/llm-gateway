@@ -39,13 +39,14 @@ check() {
 # contains <name> <needle> <curl args...>
 contains() {
   local name=$1 needle=$2; shift 2
-  local body
-  body=$(curl -sS "$@" 2>/dev/null)
-  if printf '%s' "$body" | grep -q -- "$needle"; then
+  local body rc
+  body=$(curl -sS --fail-with-body "$@" 2>/dev/null); rc=$?
+  if grep -q -F -- "$needle" <<<"$body"; then
     printf '  %s %-46s %s\n' "$(green '✓')" "$name" "$(dim "contiene '$needle'")"
     pass=$((pass + 1))
   else
     printf '  %s %-46s %s\n' "$(red '✗')" "$name" "$(red "no contiene '$needle'")"
+    printf '      %s\n' "$(dim "curl salio con $rc, ${#body} bytes")"
     printf '      %s\n' "$body" | head -3
     fail=$((fail + 1))
   fi
@@ -54,13 +55,14 @@ contains() {
 # icontains <name> <needle> <curl args...>   case-insensitive contains
 icontains() {
   local name=$1 needle=$2; shift 2
-  local body
-  body=$(curl -sS "$@" 2>/dev/null)
-  if printf '%s' "$body" | grep -qi -- "$needle"; then
+  local body rc
+  body=$(curl -sS --fail-with-body "$@" 2>/dev/null); rc=$?
+  if grep -qi -F -- "$needle" <<<"$body"; then
     printf '  %s %-46s %s\n' "$(green '✓')" "$name" "$(dim "contiene '$needle'")"
     pass=$((pass + 1))
   else
     printf '  %s %-46s %s\n' "$(red '✗')" "$name" "$(red "no contiene '$needle'")"
+    printf '      %s\n' "$(dim "curl salio con $rc, ${#body} bytes")"
     printf '      %s\n' "$body" | head -3
     fail=$((fail + 1))
   fi
@@ -69,10 +71,10 @@ icontains() {
 # absent <name> <needle> <curl args...>
 absent() {
   local name=$1 needle=$2; shift 2
-  local body
-  body=$(curl -sS "$@" 2>/dev/null)
-  if printf '%s' "$body" | grep -q -- "$needle"; then
-    printf '  %s %-46s %s\n' "$(red '✗')" "$name" "$(red "filtró '$needle'")"
+  local body rc
+  body=$(curl -sS --fail-with-body "$@" 2>/dev/null); rc=$?
+  if grep -q -F -- "$needle" <<<"$body"; then
+    printf '  %s %-46s %s\n' "$(red '✗')" "$name" "$(red "filtró '$needle' (curl $rc)")"
     fail=$((fail + 1))
   else
     printf '  %s %-46s %s\n' "$(green '✓')" "$name" "$(dim "sin '$needle'")"
