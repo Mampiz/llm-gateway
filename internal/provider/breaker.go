@@ -77,8 +77,11 @@ func NewBreaker(cfg BreakerConfig) *Breaker {
 // Allow reports whether a request may be attempted, and in which state the
 // circuit was when it decided.
 //
-// A caller that gets true must report the outcome with Success or Failure, or
-// a half-open circuit stays holding its probe slot.
+// A caller that gets true must report the outcome with Success, Failure or
+// Release. Half-open lets exactly one probe through, so a caller that takes
+// the slot and never reports would strand the circuit: it would refuse every
+// request from then on, and a provider that recovered would never come back.
+// Release exists for the paths where neither outcome applies.
 func (b *Breaker) Allow() (bool, BreakerState) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -141,6 +144,18 @@ func (b *Breaker) Failure() {
 		b.state = BreakerOpen
 		b.openedAt = b.now()
 	}
+}
+
+// Release gives back a probe slot without recording an outcome.
+//
+// It is for the cases where the attempt says nothing about the provider: the
+// caller cancelled, or the request was rejected before it could be judged. A
+// deferred Release is also what keeps a panic from stranding the circuit.
+// Calling it after Success or Failure is a no-op.
+func (b *Breaker) Release() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.probeInUse = false
 }
 
 // State reports the current state, for logs and metrics.

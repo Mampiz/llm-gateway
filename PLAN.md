@@ -119,3 +119,43 @@ make ci                     # lint + race + e2e + vuln + build
 
 All seven phases closed, including the one marked NICE. Nothing was
 sacrificed.
+
+---
+
+# Second pass
+
+## F8 · Bug hunt — REQUIRED
+
+Read every package looking for real defects: goroutine and memory leaks,
+races, stuck state machines, swallowed errors, unbounded growth. Fix what is
+found, with a regression test per fix.
+
+**Verifier**
+```
+go test ./... -count=1 -race
+go test -tags e2e ./test/e2e/ -count=1
+make test-integration
+```
+
+## F9 · Documentation — REQUIRED
+
+Package-level godoc on every package, an architecture document, an operations
+runbook, and a contributing guide.
+
+**Verifier**
+```
+go doc ./internal/... | head -50     # every package has a synopsis
+make lint                            # godot and revive stay clean
+```
+
+## F10 · Employability pass — REQUIRED
+
+The changes that make the repository read as production work: a Helm chart or
+Kubernetes manifests, structured operational docs, a versioned release, and
+whatever the audit says is missing.
+
+**Verifier**
+```
+make ci
+kubectl apply --dry-run=client -k deploy/    # manifests are valid
+```

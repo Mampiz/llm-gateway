@@ -324,3 +324,57 @@ func TestErrAllProvidersFailed_MentionsSkippedCircuits(t *testing.T) {
 		t.Errorf("error = %q, want it to say why nothing was tried", err)
 	}
 }
+
+// Half-open hands out exactly one probe slot. A caller that takes it and then
+// gives up must not keep it: the circuit would refuse everything from then on
+// and a provider that recovered would never come back.
+func TestRouter_ACancelledProbeDoesNotStrandTheCircuit(t *testing.T) {
+	p := &scripted{name: "openai", errs: []error{retryable(), retryable(), retryable(), retryable()}}
+	reg := NewRegistry()
+	reg.Register(p, "gpt-")
+	r := NewRouter(reg, nil, fastPolicy(), BreakerConfig{Threshold: 2, Cooldown: 10 * time.Millisecond})
+
+	r.Chat(context.Background(), chatReq()) //nolint:errcheck // tripping it on purpose
+	if got := r.Breakers()["openai"]; got != "open" {
+		t.Fatalf("circuit = %q, want open", got)
+	}
+
+	time.Sleep(20 * time.Millisecond) // the cooldown elapses
+
+	// A caller takes the probe slot and walks away mid-flight.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.Chat(ctx, chatReq()) //nolint:errcheck // the cancellation is the point
+
+	p.mu.Lock()
+	p.errs = nil // the provider is healthy again
+	p.mu.Unlock()
+
+	if _, _, err := r.Chat(context.Background(), chatReq()); err != nil {
+		t.Errorf("the recovered provider is still unreachable: %v", err)
+	}
+}
+
+// A rejection on our side says nothing about the provider's health, so it
+// must release the probe rather than hold it.
+func TestRouter_AClientErrorReleasesTheProbe(t *testing.T) {
+	p := &scripted{name: "openai", errs: []error{retryable(), retryable(), permanent()}}
+	reg := NewRegistry()
+	reg.Register(p, "gpt-")
+	r := NewRouter(reg, nil, fastPolicy(), BreakerConfig{Threshold: 2, Cooldown: 10 * time.Millisecond})
+
+	r.Chat(context.Background(), chatReq()) //nolint:errcheck // tripping it on purpose
+	time.Sleep(20 * time.Millisecond)
+
+	// The probe gets a 400: not the provider's fault, not a reason to keep it
+	// out of rotation either.
+	r.Chat(context.Background(), chatReq()) //nolint:errcheck // the 400 is the point
+
+	p.mu.Lock()
+	p.errs = nil
+	p.mu.Unlock()
+
+	if _, _, err := r.Chat(context.Background(), chatReq()); err != nil {
+		t.Errorf("the provider stayed out of rotation after a client error: %v", err)
+	}
+}

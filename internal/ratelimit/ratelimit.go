@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -62,6 +63,19 @@ type Config struct {
 	TTL time.Duration
 }
 
+// maxBuckets bounds how many callers the in-process limiter remembers.
+//
+// With authentication enabled the caller set is the configured key list, which
+// is small. With it disabled the caller is an address, and without a bound the
+// map grows for as long as the process runs: a memory leak with a rate limit
+// attached.
+const maxBuckets = 10_000
+
+// sweepEvery is how many calls may pass between sweeps once the limiter is
+// over its bound. Sweeping on every call would make each request scan the
+// whole map, turning a flood of distinct callers into O(n) work per request.
+const sweepEvery = 1_000
+
 // ErrInvalidConfig reports a bucket that could never allow anything.
 var ErrInvalidConfig = errors.New("invalid rate limit configuration")
 
@@ -85,8 +99,9 @@ func (c Config) validate() error {
 type Memory struct {
 	cfg Config
 
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	sinceSweep int
 
 	// now is swappable so tests can move time without sleeping.
 	now func() time.Time
@@ -126,6 +141,12 @@ func (m *Memory) Allow(_ context.Context, key string) (Decision, error) {
 		m.buckets[key] = b
 	}
 
+	m.sinceSweep++
+	if len(m.buckets) > maxBuckets && m.sinceSweep >= sweepEvery {
+		m.sinceSweep = 0
+		m.sweepLocked(now)
+	}
+
 	refill(b, m.cfg, now)
 
 	if b.tokens < 1 {
@@ -142,6 +163,54 @@ func (m *Memory) Allow(_ context.Context, key string) (Decision, error) {
 		Limit:     m.cfg.Burst,
 		Remaining: int(b.tokens),
 	}, nil
+}
+
+// sweepLocked brings the bucket count back under the bound.
+//
+// It drops fully refilled buckets first, which is free: a full bucket is
+// indistinguishable from one that never existed, so forgetting it cannot
+// refund a caller that still owes tokens.
+//
+// If that is not enough -- a sustained flood of distinct callers with a slow
+// refill -- it drops the fullest of what remains, which refunds the smallest
+// possible allowance. Choosing a hard memory bound over perfect accounting is
+// deliberate: an unbounded map ends the process, while a fractional refund
+// under a flood does not. It is also the point at which the Redis limiter
+// earns its place, since Redis applies its own eviction policy and the bound
+// stops being this process's problem.
+func (m *Memory) sweepLocked(now time.Time) {
+	type aged struct {
+		key    string
+		tokens float64
+	}
+
+	remaining := make([]aged, 0, len(m.buckets))
+	full := float64(m.cfg.Burst)
+
+	for key, b := range m.buckets {
+		projected := b.tokens
+		if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+			projected += elapsed * m.cfg.Rate
+		}
+		if projected >= full {
+			delete(m.buckets, key)
+			continue
+		}
+		remaining = append(remaining, aged{key: key, tokens: projected})
+	}
+
+	if len(m.buckets) <= maxBuckets {
+		return
+	}
+
+	// Fullest first: those owe the least, so forgetting them costs the least.
+	sort.Slice(remaining, func(i, j int) bool { return remaining[i].tokens > remaining[j].tokens })
+	for _, a := range remaining {
+		if len(m.buckets) <= maxBuckets {
+			return
+		}
+		delete(m.buckets, a.key)
+	}
 }
 
 // Close implements Limiter. It drops every bucket, which is all this

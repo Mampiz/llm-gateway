@@ -66,18 +66,30 @@ func (s *Server) cachedChat(ctx context.Context, r *http.Request, req provider.C
 	}
 
 	v, err, shared := s.inflight.Do(key, func() (any, error) {
+		// The shared call runs with whichever caller arrived first, but it is
+		// serving all of them. Tying it to that one caller's cancellation
+		// would fail everybody waiting behind it the moment the leader
+		// disconnects, even though they are still there.
+		//
+		// The deadline is kept, so a shared call is still bounded; only the
+		// cancellation is detached. A call whose callers all left runs to
+		// completion and stores its answer, which is the outcome that wastes
+		// the least: the work was already paid for.
+		sharedCtx, cancelShared := context.WithTimeout(context.WithoutCancel(ctx), s.requestTimeout)
+		defer cancelShared()
+
 		// Check again inside the group: a request that waited here may find
 		// the answer the leader just stored.
-		if resp, ok, err := s.cache.Get(ctx, key); err == nil && ok {
+		if resp, ok, err := s.cache.Get(sharedCtx, key); err == nil && ok {
 			return result{resp: resp, served: servedByCache}, nil
 		}
 
-		resp, served, err := s.router.Chat(ctx, req)
+		resp, served, err := s.router.Chat(sharedCtx, req)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := s.cache.Set(ctx, key, resp, s.cacheTTL); err != nil {
+		if err := s.cache.Set(sharedCtx, key, resp, s.cacheTTL); err != nil {
 			s.logger.Warn("cache write failed",
 				"error", err, "request_id", requestID)
 		}

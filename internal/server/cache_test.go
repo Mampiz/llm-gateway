@@ -5,6 +5,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -203,5 +205,77 @@ func TestCache_LeavesStreamingAlone(t *testing.T) {
 	// Both requests went upstream; neither carried a cache header.
 	if rec := do(h, http.MethodPost, "/v1/chat/completions", streamBody); rec.Header().Get(cacheHeader) != "" {
 		t.Errorf("%s = %q on a stream, want it absent", cacheHeader, rec.Header().Get(cacheHeader))
+	}
+}
+
+// singleflight collapses several callers onto one upstream call, and that call
+// runs with whichever context happened to arrive first. If the leader walks
+// away, everyone waiting behind it must not be dragged down with it: they are
+// still connected and still waiting for an answer.
+func TestCache_LeaderCancellationDoesNotFailTheFollowers(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+
+	p := &stubProvider{
+		chat: func(ctx context.Context, _ provider.ChatRequest) (*provider.ChatResponse, error) {
+			calls.Add(1)
+			select {
+			case <-release:
+				return okResponse(), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(p)
+	if err := reg.SetDefault("stub"); err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(reg, logger, 5*time.Second, "test").
+		WithCache(cache.NewMemory(100), time.Minute, "shared").
+		Handler()
+
+	// The leader, whose client gives up mid-flight.
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(validBody)).
+			WithContext(leaderCtx)
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	// A follower that arrives while the leader is still in flight and stays.
+	time.Sleep(50 * time.Millisecond)
+	followerCode := make(chan int, 1)
+	go func() {
+		followerCode <- do(h, http.MethodPost, "/v1/chat/completions", validBody).Code
+	}()
+
+	// The leader gives up, then the upstream answers. Releasing before waiting
+	// on the leader matters: it is still parked inside the shared call, so
+	// waiting first would deadlock the test rather than the code.
+	time.Sleep(50 * time.Millisecond)
+	cancelLeader()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-leaderDone
+
+	select {
+	case code := <-followerCode:
+		if code != http.StatusOK {
+			t.Errorf("the follower got %d after the leader walked away, want 200: "+
+				"it was still connected and still waiting", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the follower never finished")
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("the provider was called %d times, want 1", got)
 	}
 }

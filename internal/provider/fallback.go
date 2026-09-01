@@ -192,50 +192,12 @@ func do[T any](ctx context.Context, r *Router, req ChatRequest, fn func(context.
 	var skipped []string
 
 	for _, attempt := range attempts {
-		name := attempt.Provider.Name()
-		breaker := r.breakerFor(name)
-
-		allowed, state := breaker.Allow()
-		if !allowed {
-			skipped = append(skipped, fmt.Sprintf("%s (circuit %s)", name, state))
-			continue
+		result, name, err, done := tryProvider(ctx, r, attempt, req, fn, &skipped)
+		if done {
+			return result, name, err
 		}
-
-		call := req
-		call.Model = attempt.Model
-
-		for try := 1; try <= r.policy.Attempts; try++ {
-			result, err := fn(ctx, attempt.Provider, call)
-			if err == nil {
-				breaker.Success()
-				return result, name, nil
-			}
+		if err != nil {
 			lastErr = err
-
-			// The caller giving up is not the provider's failure, and must not
-			// count against its circuit or trigger a fallback.
-			if ctx.Err() != nil {
-				return zero, name, err
-			}
-
-			var pErr *Error
-			retryable := errors.As(err, &pErr) && pErr.Retryable()
-			if !retryable {
-				// A rejection on our side, not an outage. Do not blame the
-				// provider and do not ask anyone else the same question.
-				return zero, name, err
-			}
-
-			breaker.Failure()
-
-			if try == r.policy.Attempts {
-				break
-			}
-			select {
-			case <-time.After(r.policy.backoff(try)):
-			case <-ctx.Done():
-				return zero, name, ctx.Err()
-			}
 		}
 	}
 
@@ -244,6 +206,70 @@ func do[T any](ctx context.Context, r *Router, req ChatRequest, fn func(context.
 		return zero, "", fmt.Errorf("%w: %s", ErrAllProvidersFailed, strings.Join(skipped, ", "))
 	}
 	return zero, "", fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
+}
+
+// tryProvider runs one provider through the retry policy.
+//
+// done reports whether the chain should stop here, either because the attempt
+// succeeded or because the failure is not one another provider could fix.
+// When done is false the returned error is the last one seen, for the caller
+// to keep as context if nothing else works.
+func tryProvider[T any](ctx context.Context, r *Router, attempt Attempt, req ChatRequest, fn func(context.Context, Provider, ChatRequest) (T, error), skipped *[]string) (result T, name string, err error, done bool) {
+	var zero T
+
+	name = attempt.Provider.Name()
+	breaker := r.breakerFor(name)
+
+	allowed, state := breaker.Allow()
+	if !allowed {
+		*skipped = append(*skipped, fmt.Sprintf("%s (circuit %s)", name, state))
+		return zero, name, nil, false
+	}
+
+	// Half-open hands out exactly one probe slot, and several paths below
+	// leave without an outcome to report: the caller cancels, the request is
+	// rejected on our side, or fn panics. Any of those would strand the
+	// circuit half-open forever -- refusing every request from then on, so a
+	// provider that recovered would never come back. Release is a no-op once
+	// Success or Failure has spoken.
+	defer breaker.Release()
+
+	call := req
+	call.Model = attempt.Model
+
+	for try := 1; try <= r.policy.Attempts; try++ {
+		out, err := fn(ctx, attempt.Provider, call)
+		if err == nil {
+			breaker.Success()
+			return out, name, nil, true
+		}
+
+		// The caller giving up is not the provider's failure, and must not
+		// count against its circuit or trigger a fallback.
+		if ctx.Err() != nil {
+			return zero, name, err, true
+		}
+
+		var pErr *Error
+		if !errors.As(err, &pErr) || !pErr.Retryable() {
+			// A rejection on our side, not an outage. Do not blame the
+			// provider and do not ask anyone else the same question.
+			return zero, name, err, true
+		}
+
+		breaker.Failure()
+
+		if try == r.policy.Attempts {
+			return zero, name, err, false
+		}
+		select {
+		case <-time.After(r.policy.backoff(try)):
+		case <-ctx.Done():
+			return zero, name, ctx.Err(), true
+		}
+	}
+
+	return zero, name, nil, false
 }
 
 // Chat runs a buffered completion through the fallback chain, reporting which
