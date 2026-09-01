@@ -55,14 +55,26 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status int
 	bytes  int
+
+	// committed records whether a status has reached the wire. Once it has,
+	// nothing further can change it, which is what the panic handler needs to
+	// know before trying to turn a failure into a 500.
+	committed bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
+	if r.committed {
+		// Go would log a superfluous WriteHeader here and ignore it anyway.
+		return
+	}
+	r.committed = true
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {
+	// An implicit 200, the same one net/http would send.
+	r.committed = true
 	n, err := r.ResponseWriter.Write(b)
 	r.bytes += n
 	return n, err
@@ -101,18 +113,37 @@ func logging(logger *slog.Logger) middleware {
 func recoverer(logger *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Wrapped so the recovery can tell whether the response already
+			// started. A panic partway through a stream cannot be turned into
+			// a 500: the status is on the wire, and writing an error object
+			// after it would splice JSON into whatever was being streamed.
+			rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
 			//nolint:contextcheck // writeError performs no I/O that could be cancelled
 			defer func() {
-				if rec := recover(); rec != nil {
-					logger.Error("panic recovered",
-						"panic", rec,
-						"path", r.URL.Path,
-						"request_id", RequestIDFrom(r.Context()),
-					)
-					writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+				rec := recover()
+				if rec == nil {
+					return
 				}
+
+				logger.Error("panic recovered",
+					"panic", rec,
+					"path", r.URL.Path,
+					"committed", rw.committed,
+					"request_id", RequestIDFrom(r.Context()),
+				)
+
+				if rw.committed {
+					// Nothing can be said to the client any more. Cutting the
+					// connection is the honest signal that the answer is
+					// incomplete, and it is what net/http does with a
+					// re-panic of ErrAbortHandler.
+					panic(http.ErrAbortHandler)
+				}
+				writeError(rw, http.StatusInternalServerError, "internal_error", "internal server error")
 			}()
-			next.ServeHTTP(w, r)
+
+			next.ServeHTTP(rw, r)
 		})
 	}
 }

@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -131,5 +133,63 @@ func TestChain_AppliesOutermostFirst(t *testing.T) {
 		if order[i] != want[i] {
 			t.Fatalf("order = %v, want %v", order, want)
 		}
+	}
+}
+
+// A panic after the response has started cannot be turned into a 500: the
+// status is already on the wire. Writing one anyway logs a superfluous
+// WriteHeader and splices an error object into whatever was being streamed,
+// corrupting it for the client.
+func TestRecoverer_DoesNotRewriteACommittedResponse(t *testing.T) {
+	h := recoverer(discardLogger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: first\n\n"))
+		panic("boom halfway through")
+	}))
+
+	rec := httptest.NewRecorder()
+
+	// The recovery re-panics with ErrAbortHandler, which net/http treats as
+	// "drop this connection quietly". A truncated stream is the honest signal
+	// that the answer is incomplete; a spliced error object is not.
+	func() {
+		defer func() {
+			got := recover()
+			err, _ := got.(error)
+			if !errors.Is(err, http.ErrAbortHandler) {
+				t.Errorf("re-panicked with %v, want http.ErrAbortHandler", got)
+			}
+		}()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want the committed 200 left alone", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "data: first") {
+		t.Errorf("body = %q, want what was already sent preserved", body)
+	}
+	if strings.Contains(body, "internal_error") {
+		t.Errorf("body = %q, want no error object spliced into a started response", body)
+	}
+}
+
+// Before anything is written the panic still has to become a clean 500.
+func TestRecoverer_StillAnswersAnUncommittedRequest(t *testing.T) {
+	h := recoverer(discardLogger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom before writing")
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("panic response is not JSON: %v", err)
 	}
 }
