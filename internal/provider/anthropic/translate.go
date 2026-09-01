@@ -98,21 +98,30 @@ func fromAnthropic(resp apiResponse) (*provider.ChatResponse, error) {
 		return nil, errors.New("response carries no text content")
 	}
 
-	switch resp.StopReason {
-	case stopEndTurn:
-		tmpChoice.FinishReason = "stop"
-	case stopStopSequence:
-		tmpChoice.FinishReason = "stop"
-	case stopMaxTokens:
-		tmpChoice.FinishReason = "length"
-	case stopToolUse:
-		tmpChoice.FinishReason = "tool_calls"
-	default:
-		tmpChoice.FinishReason = resp.StopReason
-	}
+	tmpChoice.FinishReason = mapStopReason(resp.StopReason)
 
 	out.Choices = append(out.Choices, tmpChoice)
 
 	return out, nil
 
+}
+
+// mapStopReason translates this vendor's stop reason vocabulary into the
+// canonical one. It is shared by the buffered and the streaming paths, which
+// receive the same values through different events.
+//
+// Unknown values pass through untouched: a reason we do not recognise is more
+// informative than an empty string, and claiming a truncated answer stopped
+// normally would be a lie.
+func mapStopReason(reason string) string {
+	switch reason {
+	case stopEndTurn, stopStopSequence:
+		return "stop"
+	case stopMaxTokens:
+		return "length"
+	case stopToolUse:
+		return "tool_calls"
+	default:
+		return reason
+	}
 }

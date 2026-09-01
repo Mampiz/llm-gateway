@@ -427,6 +427,111 @@ func fakeStreamingOpenAI(t *testing.T) string {
 	return srv.URL
 }
 
+// TestStreamsAnthropic drives a streamed answer written in one vendor dialect
+// out to a client that only speaks the other one.
+func TestStreamsAnthropic(t *testing.T) {
+	base := gateway(t, map[string]string{
+		"ANTHROPIC_API_KEY":  "sk-ant-e2e",
+		"ANTHROPIC_BASE_URL": fakeStreamingAnthropic(t),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	body := `{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, raw)
+	}
+
+	var text strings.Builder
+	var finish string
+	var sawDone bool
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			sawDone = true
+			break
+		}
+		var chunk struct {
+			Object  string `json:"object"`
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			t.Fatalf("frame is not JSON: %v (%s)", err, payload)
+		}
+		// The client must see OpenAI-shaped frames whatever spoke upstream.
+		if chunk.Object != "chat.completion.chunk" {
+			t.Errorf("object = %q, want chat.completion.chunk", chunk.Object)
+		}
+		if len(chunk.Choices) > 0 {
+			text.WriteString(chunk.Choices[0].Delta.Content)
+			if chunk.Choices[0].FinishReason != nil {
+				finish = *chunk.Choices[0].FinishReason
+			}
+		}
+	}
+
+	if !sawDone {
+		t.Error("the stream never reached [DONE]")
+	}
+	if got := text.String(); got != "hola mundo" {
+		t.Errorf("assembled text = %q, want %q: pings and block boundaries must not leak", got, "hola mundo")
+	}
+	// end_turn upstream has to reach the client as the canonical word.
+	if finish != "stop" {
+		t.Errorf("finish_reason = %q, want stop translated from end_turn", finish)
+	}
+}
+
+// fakeStreamingAnthropic emits a Messages API stream, keep-alives included.
+func fakeStreamingAnthropic(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+
+		send := func(name, data string) {
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
+			_ = rc.Flush()
+		}
+
+		send("message_start", `{"type":"message_start","message":{"id":"msg_e2e","model":"claude-sonnet-5","usage":{"input_tokens":7}}}`)
+		send("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		send("ping", `{"type":"ping"}`)
+		send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hola "}}`)
+		send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"mundo"}}`)
+		send("content_block_stop", `{"type":"content_block_stop","index":0}`)
+		send("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`)
+		send("message_stop", `{"type":"message_stop"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
 // TestStartupFailsOnBadConfig proves the binary refuses to run half-configured
 // instead of surfacing the problem later as a confusing runtime error.
 func TestStartupFailsOnBadConfig(t *testing.T) {

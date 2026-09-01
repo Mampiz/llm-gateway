@@ -141,6 +141,11 @@ contains "emite tramas SSE"                "data: " "${CT[@]}" -d "$STREAM_REQ" 
 contains "termina con [DONE]"              "[DONE]" "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
 contains "el texto llega en deltas"        '"delta"' "${CT[@]}" -d "$STREAM_REQ" "${GW}/v1/chat/completions"
 
+CLAUDE_STREAM='{"model":"claude-sonnet-5","stream":true,"messages":[{"role":"user","content":"hola"}]}'
+check    "claude-* tambien hace streaming"   200 "${CT[@]}" -d "$CLAUDE_STREAM" "${GW}/v1/chat/completions"
+contains "traducido a formato OpenAI"      '"chat.completion.chunk"' "${CT[@]}" -d "$CLAUDE_STREAM" "${GW}/v1/chat/completions"
+absent   "los ping no llegan al cliente"    '"ping"' "${CT[@]}" -d "$CLAUDE_STREAM" "${GW}/v1/chat/completions"
+
 echo
 echo "== propagacion de errores del upstream =="
 kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null

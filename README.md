@@ -15,7 +15,7 @@ A single OpenAI-compatible endpoint in front of several LLM providers: routing, 
 
 ## Status
 
-Phase 2 — multi-provider normalization. Work in progress.
+Phase 3 — streaming. Work in progress.
 
 ## Routing
 
