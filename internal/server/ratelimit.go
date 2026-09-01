@@ -55,6 +55,7 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			}
 			h.Set("Retry-After", strconv.Itoa(seconds))
 
+			s.metrics.RateLimited()
 			s.logger.Info("rate limited",
 				"caller", key,
 				"retry_after", decision.RetryAfter,

@@ -132,6 +132,36 @@ goes through the router instead of resolving a single provider.
 
 **Verifier** — passing. Smoke grew to 39 checks.
 
+### F5 · Prometheus metrics — closed
+
+New `internal/metrics` package and a `/metrics` endpoint, with recording hooks
+in both the buffered and the streaming paths.
+
+**Decisions**
+
+- **The model label is capped at 100 distinct values.** A label taken from user
+  input is the classic way to kill a Prometheus server: one fresh model name
+  per request is one fresh time series per request. Past the cap everything
+  collapses into `other`, losing detail but never the server.
+- **`llmgw_rate_limited_total` carries no caller label** for the same reason,
+  with the added wrinkle that the dimension would be attacker-controlled.
+- **Duration buckets run to 160 seconds.** The client library's defaults stop
+  at 10, which would put most streamed answers in `+Inf`.
+- **First-token latency is its own histogram.** On a streamed answer the total
+  duration is not what a user perceives; the wait for the first word is.
+- **Outcomes are a small closed set** (`ok`, `client_error`, `upstream_error`,
+  `timeout`, `cancelled`). They are label values, so the set has to stay
+  bounded.
+- **A request served by nobody is still counted**, under provider `none`,
+  or the error rate would hide the outages that never reached a vendor.
+- **`/metrics` is unauthenticated**, like `/healthz`: it exposes counts rather
+  than content, and a scrape endpoint needing a credential is one more thing
+  for a monitoring stack to get wrong.
+- **A dedicated registry, not the default one.** The process publishes what it
+  chooses to, not whatever a dependency happened to register.
+
+**Verifier** — passing. Smoke grew to 46 checks.
+
 ## Discarded ideas
 
 _Out-of-scope thoughts land here instead of in the code._

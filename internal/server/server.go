@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/Mampiz/llm-gateway/internal/auth"
+	"github.com/Mampiz/llm-gateway/internal/metrics"
 	"github.com/Mampiz/llm-gateway/internal/provider"
 	"github.com/Mampiz/llm-gateway/internal/ratelimit"
 )
@@ -27,6 +30,13 @@ type Server struct {
 	// router resolves a model to the ordered providers that may serve it and
 	// owns the retry policy and the circuit breakers.
 	router *provider.Router
+
+	// metricsHandler serves /metrics when one is configured.
+	metricsHandler http.Handler
+
+	// metrics publishes what the gateway is doing. Never nil: a no-op
+	// registry keeps the recording calls free of nil checks.
+	metrics *metrics.Metrics
 
 	// limiter meters callers. A nil limiter means rate limiting is off.
 	limiter ratelimit.Limiter
@@ -52,6 +62,7 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 		logger:          logger,
 		requestTimeout:  requestTimeout,
 		version:         version,
+		metrics:         metrics.New(prometheus.NewRegistry()),
 		streamIdle:      60 * time.Second,
 		streamHeartbeat: 15 * time.Second,
 	}
@@ -68,6 +79,16 @@ func (s *Server) WithAuth(keys auth.Store) *Server {
 // with the retry policy and the circuit breaker settings.
 func (s *Server) WithFallback(fallbacks map[string][]string, policy provider.RetryPolicy, bcfg provider.BreakerConfig) *Server {
 	s.router = provider.NewRouter(s.registry, fallbacks, policy, bcfg)
+	return s
+}
+
+// WithMetrics attaches the collectors the gateway publishes. Without it the
+// server still records, into a registry nobody scrapes.
+func (s *Server) WithMetrics(m *metrics.Metrics, h http.Handler) *Server {
+	if m != nil {
+		s.metrics = m
+	}
+	s.metricsHandler = h
 	return s
 }
 
@@ -99,6 +120,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	// Unauthenticated, like the health probe: a scrape endpoint that needs a
+	// credential is one more thing to get wrong in a monitoring stack, and it
+	// exposes counts rather than content.
+	if s.metricsHandler != nil {
+		mux.Handle("GET /metrics", s.metricsHandler)
+	}
 	// Only the API surface is guarded: a health probe that needs a credential
 	// stops working exactly when it is most needed.
 	// Order matters: authenticate first so the limiter can meter a caller

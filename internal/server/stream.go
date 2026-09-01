@@ -55,8 +55,12 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 	// Only the failure to *start* can fail over. Once frames have reached the
 	// client the response is committed, and switching vendors mid-answer
 	// would splice two different completions together.
+	started := time.Now()
+
 	stream, served, err := s.router.ChatStream(streamCtx, req)
 	if err != nil {
+		s.metrics.RequestFinished(served, req.Model, outcomeFor(err), true, time.Since(started).Seconds())
+		s.recordUpstreamError(served, err)
 		if errors.Is(err, provider.ErrStreamingNotSupported) {
 			writeError(w, http.StatusNotImplemented, "not_implemented",
 				"no configured provider for this model supports streaming")
@@ -82,6 +86,10 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 	_ = rc.Flush()
 
 	created := time.Now().Unix()
+
+	done := s.metrics.RequestStarted()
+	defer done()
+	var firstTokenSeen bool
 
 	ch := make(chan provider.Chunk, 8)
 	errCh := make(chan error, 1)
@@ -114,9 +122,13 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 		case chunk, ok := <-ch:
 			if !ok {
 				if err := <-errCh; err != nil {
+					s.metrics.RequestFinished(served, req.Model, outcomeFor(err), true, time.Since(started).Seconds())
+					s.recordUpstreamError(served, err)
 					writeSSEError(w, rc, err)
 					return
 				}
+				s.metrics.RequestFinished(served, req.Model, "ok", true, time.Since(started).Seconds())
+				s.metrics.CircuitStates(s.router.Breakers())
 				writeSSEDone(w, rc)
 				return
 			}
@@ -140,16 +152,29 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 			if !writeSSE(w, rc, payload) {
 				// The client is gone. Returning cancels the context, which is
 				// what tears down the upstream call and stops the meter.
+				s.metrics.RequestFinished(served, req.Model, "cancelled", true, time.Since(started).Seconds())
 				return
+			}
+
+			// The latency a user actually perceives is the wait for the first
+			// word, not the total.
+			if !firstTokenSeen && chunk.Content != "" {
+				firstTokenSeen = true
+				s.metrics.FirstToken(served, req.Model, time.Since(started).Seconds())
+			}
+			if chunk.Usage != nil {
+				s.metrics.Tokens(served, req.Model, chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
 			}
 
 		case <-idleTimer.C:
 			cancel()
+			s.metrics.RequestFinished(served, req.Model, "timeout", true, time.Since(started).Seconds())
 			writeSSEError(w, rc, context.DeadlineExceeded)
 			return
 
 		case <-heartbeat.C:
 			if !writeSSEComment(w, rc) {
+				s.metrics.RequestFinished(served, req.Model, "cancelled", true, time.Since(started).Seconds())
 				return
 			}
 		}

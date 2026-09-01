@@ -44,6 +44,28 @@ exactly when something is wrong. Starting with neither keys nor an explicit
 `GATEWAY_AUTH_DISABLED=true` is a startup error, so an open gateway is always
 a deliberate choice.
 
+## Metrics
+
+`/metrics` speaks Prometheus and needs no credential, like the health probe.
+
+| Metric | What it answers |
+|---|---|
+| `llmgw_requests_total` | throughput and error rate, by provider, model, outcome and mode |
+| `llmgw_request_duration_seconds` | end-to-end latency |
+| `llmgw_stream_first_token_seconds` | the wait a user actually feels on a streamed answer |
+| `llmgw_tokens_total` | tokens in and out, the basis for cost per provider |
+| `llmgw_upstream_errors_total` | which vendor is failing, and with what status |
+| `llmgw_circuit_state` | which providers are out of rotation right now |
+| `llmgw_rate_limited_total` | refusals by the limiter |
+| `llmgw_requests_in_flight` | concurrency |
+
+Two decisions worth naming. The duration buckets run to 160 seconds, because
+the defaults stop at 10 and would put most streamed answers in `+Inf`. And the
+model label is capped at 100 distinct values, collapsing into `other` beyond
+that: a label taken from user input is the classic way to kill a Prometheus
+server, since one fresh model name per request is one fresh time series per
+request.
+
 ## Automatic fallback
 
 When a provider fails, rate-limits or times out, the request is retried and

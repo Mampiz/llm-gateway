@@ -186,6 +186,16 @@ check "upstream caido -> 502"           502 "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v
 contains "healthz expone los circuitos"  "circuits" "${GW}/healthz"
 
 echo
+echo "== metricas =="
+check    "/metrics responde"               200 "${GW}/metrics"
+contains "cuenta peticiones"               "llmgw_requests_total" "${GW}/metrics"
+contains "histograma de latencia"          "llmgw_request_duration_seconds" "${GW}/metrics"
+contains "contabiliza tokens"              "llmgw_tokens_total" "${GW}/metrics"
+contains "estado de los circuitos"         "llmgw_circuit_state" "${GW}/metrics"
+contains "metricas del runtime de Go"      "go_goroutines" "${GW}/metrics"
+check    "/metrics no pide credencial"     200 "${NOAUTH[@]}" "${GW}/metrics"
+
+echo
 echo "== fallback automatico =="
 # Restart the fake so only the OpenAI dialect is unreachable is not possible
 # with one process, so instead point the gateway's primary at a dead port and

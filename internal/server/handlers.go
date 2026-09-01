@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Mampiz/llm-gateway/internal/provider"
 )
@@ -74,11 +75,21 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
 
+	done := s.metrics.RequestStarted()
+	defer done()
+	started := time.Now()
+
 	resp, served, err := s.router.Chat(ctx, req)
 	if err != nil {
+		s.metrics.RequestFinished(served, req.Model, outcomeFor(err), false, time.Since(started).Seconds())
+		s.recordUpstreamError(served, err)
 		s.writeProviderError(w, r, served, err)
 		return
 	}
+
+	s.metrics.RequestFinished(served, req.Model, "ok", false, time.Since(started).Seconds())
+	s.metrics.Tokens(served, resp.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+	s.metrics.CircuitStates(s.router.Breakers())
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -156,6 +167,36 @@ func (s *Server) writeProviderError(w http.ResponseWriter, r *http.Request, prov
 			return
 		}
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+	}
+}
+
+// outcomeFor reduces an error to one of a small, bounded set of words. The
+// set has to stay small: it is a metric label, and an unbounded one would
+// multiply every series by the number of distinct failure messages.
+func outcomeFor(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+
+	var pErr *provider.Error
+	if errors.As(err, &pErr) {
+		if pErr.StatusCode >= 400 && pErr.StatusCode < 500 {
+			return "client_error"
+		}
+		return "upstream_error"
+	}
+	return "error"
+}
+
+// recordUpstreamError publishes the status a provider returned, when there
+// was one.
+func (s *Server) recordUpstreamError(served string, err error) {
+	var pErr *provider.Error
+	if errors.As(err, &pErr) {
+		s.metrics.UpstreamError(served, pErr.StatusCode)
 	}
 }
 

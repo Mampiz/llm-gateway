@@ -13,7 +13,12 @@ import (
 	"time"
 
 	"github.com/Mampiz/llm-gateway/internal/auth"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/Mampiz/llm-gateway/internal/config"
+	"github.com/Mampiz/llm-gateway/internal/metrics"
 	"github.com/Mampiz/llm-gateway/internal/provider"
 	"github.com/Mampiz/llm-gateway/internal/provider/anthropic"
 	"github.com/Mampiz/llm-gateway/internal/provider/mock"
@@ -90,10 +95,21 @@ func run() error {
 		logger.Info("automatic fallback enabled", "chains", len(fallbacks))
 	}
 
+	// A dedicated registry rather than the default one: the process publishes
+	// what it chooses to, not whatever any dependency happened to register.
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	m := metrics.New(promReg)
+	metricsHandler := promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
 			WithAuth(keys).
+			WithMetrics(m, metricsHandler).
 			WithRateLimiter(limiter).
 			WithFallback(fallbacks,
 				provider.RetryPolicy{
