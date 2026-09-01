@@ -18,6 +18,7 @@ import (
 	"github.com/Mampiz/llm-gateway/internal/provider/anthropic"
 	"github.com/Mampiz/llm-gateway/internal/provider/mock"
 	"github.com/Mampiz/llm-gateway/internal/provider/openai"
+	"github.com/Mampiz/llm-gateway/internal/ratelimit"
 	"github.com/Mampiz/llm-gateway/internal/server"
 )
 
@@ -53,6 +54,10 @@ func run() error {
 
 	logger := newLogger(cfg.LogLevel)
 
+	// A short budget for the dependencies that must be reachable at startup.
+	ctxStartup, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelStartup()
+
 	reg, err := buildRegistry(cfg)
 	if err != nil {
 		return err
@@ -69,10 +74,19 @@ func run() error {
 		logger.Info("client authentication enabled", "keys", keys.Len())
 	}
 
+	limiter, err := buildLimiter(ctxStartup, cfg, logger)
+	if err != nil {
+		return err
+	}
+	if limiter != nil {
+		defer func() { _ = limiter.Close() }()
+	}
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
 			WithAuth(keys).
+			WithRateLimiter(limiter).
 			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
 			Handler(),
 
@@ -120,6 +134,36 @@ func run() error {
 	}
 	logger.Info("gateway stopped cleanly")
 	return nil
+}
+
+// buildLimiter picks the rate limiter that matches the deployment: Redis when
+// one is configured, in-process otherwise, and none at all when the rate is
+// zero or less.
+//
+// The in-process one is correct for a single instance and wrong for several:
+// three replicas each allowing the configured rate allow three times the
+// intended limit. That is why a Redis URL is what turns the limit real.
+func buildLimiter(ctx context.Context, cfg *config.Config, logger *slog.Logger) (ratelimit.Limiter, error) {
+	if cfg.RateLimitRPS <= 0 {
+		logger.Warn("rate limiting is disabled: any caller can spend the whole budget")
+		return nil, nil
+	}
+
+	rlCfg := ratelimit.Config{Rate: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst}
+
+	if cfg.RedisURL == "" {
+		logger.Warn("rate limiting is in-process: correct for one instance, too permissive for several",
+			"rps", cfg.RateLimitRPS, "burst", cfg.RateLimitBurst)
+		return ratelimit.NewMemory(rlCfg)
+	}
+
+	l, err := ratelimit.NewRedis(ctx, cfg.RedisURL, rlCfg)
+	if err != nil {
+		return nil, fmt.Errorf("connecting the rate limiter: %w", err)
+	}
+	logger.Info("rate limiting is distributed",
+		"rps", cfg.RateLimitRPS, "burst", cfg.RateLimitBurst)
+	return l, nil
 }
 
 // buildRegistry wires the providers that are configured and declares which

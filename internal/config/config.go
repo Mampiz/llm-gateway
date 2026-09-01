@@ -62,6 +62,19 @@ type Config struct {
 	// asked for explicitly: an unauthenticated gateway is never the default.
 	AuthDisabled bool
 
+	// RateLimitRPS is the sustained per-caller allowance in requests per
+	// second. Zero or less disables rate limiting entirely.
+	RateLimitRPS float64
+
+	// RateLimitBurst is how many requests a caller may make at once after
+	// being idle.
+	RateLimitBurst int
+
+	// RedisURL points at the Redis that backs the distributed limiter. When
+	// empty the limiter lives in this process, which is correct for a single
+	// instance and wrong for several.
+	RedisURL string
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
@@ -85,6 +98,10 @@ func Load() (*Config, error) {
 
 		APIKeys:      env("GATEWAY_API_KEYS", ""),
 		AuthDisabled: envBool("GATEWAY_AUTH_DISABLED", false),
+
+		RateLimitRPS:   envFloat("GATEWAY_RATE_LIMIT_RPS", 10),
+		RateLimitBurst: envInt("GATEWAY_RATE_LIMIT_BURST", 20),
+		RedisURL:       env("GATEWAY_REDIS_URL", ""),
 
 		LogLevel: env("GATEWAY_LOG_LEVEL", "info"),
 	}
@@ -124,6 +141,13 @@ func envBool(key string, fallback bool) bool {
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envFloat(key string, fallback float64) float64 {
+	if f, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(key)), 64); err == nil {
+		return f
 	}
 	return fallback
 }

@@ -51,6 +51,21 @@ contains() {
   fi
 }
 
+# icontains <name> <needle> <curl args...>   case-insensitive contains
+icontains() {
+  local name=$1 needle=$2; shift 2
+  local body
+  body=$(curl -sS "$@" 2>/dev/null)
+  if printf '%s' "$body" | grep -qi -- "$needle"; then
+    printf '  %s %-46s %s\n' "$(green '✓')" "$name" "$(dim "contiene '$needle'")"
+    pass=$((pass + 1))
+  else
+    printf '  %s %-46s %s\n' "$(red '✗')" "$name" "$(red "no contiene '$needle'")"
+    printf '      %s\n' "$body" | head -3
+    fail=$((fail + 1))
+  fi
+}
+
 # absent <name> <needle> <curl args...>
 absent() {
   local name=$1 needle=$2; shift 2
@@ -69,6 +84,7 @@ json() { printf '%s' "$1"; }
 post() { echo -H 'Content-Type: application/json'; }
 
 cleanup() {
+  [ -n "${RL_PID:-}" ]   && kill "$RL_PID"   2>/dev/null
   [ -n "${GW_PID:-}" ]   && kill "$GW_PID"   2>/dev/null
   [ -n "${FAKE_PID:-}" ] && kill "$FAKE_PID" 2>/dev/null
   wait 2>/dev/null
@@ -166,6 +182,27 @@ contains "mensaje del vendor conservado" "told to fail" "${CT[@]}" -d "$OPENAI_R
 
 kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null
 check "upstream caido -> 502"           502 "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+
+echo
+echo "== rate limiting =="
+RL_PORT=$((GW_PORT + 1))
+GATEWAY_ADDR=":${RL_PORT}" \
+GATEWAY_LOG_LEVEL=error \
+GATEWAY_API_KEYS="smoke:${GW_KEY}" \
+GATEWAY_RATE_LIMIT_RPS=0.01 \
+GATEWAY_RATE_LIMIT_BURST=2 \
+  ./bin/gateway > /tmp/smoke-rl.log 2>&1 &
+RL_PID=$!
+for _ in $(seq 40); do curl -sf "http://127.0.0.1:${RL_PORT}/healthz" >/dev/null 2>&1 && break; sleep 0.25; done
+
+RL="http://127.0.0.1:${RL_PORT}"
+check "1 de 2 del burst -> 200"          200 "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+check "2 de 2 del burst -> 200"          200 "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+check "pasado el burst -> 429"           429 "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+contains "cabecera Retry-After"          "Retry-After" -D - -o /dev/null "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+icontains "cabecera X-RateLimit-Limit"   "x-ratelimit-limit" -D - -o /dev/null "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+icontains "cabecera X-RateLimit-Remaining" "x-ratelimit-remaining" -D - -o /dev/null "${CT[@]}" -d "$MOCK_REQ" "${RL}/v1/chat/completions"
+kill "$RL_PID" 2>/dev/null; wait "$RL_PID" 2>/dev/null
 
 echo
 if [ "$fail" -eq 0 ]; then

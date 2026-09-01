@@ -67,6 +67,39 @@ carried in the request context for the phases that follow.
 
 **Verifier** — passing. Smoke grew to 29 checks.
 
+### F3 · Distributed rate limiting — closed
+
+New `internal/ratelimit` package with two implementations behind one
+interface, plus a middleware that meters every authenticated caller. First
+external dependency in the project: `github.com/redis/go-redis/v9`.
+
+**Decisions**
+
+- **Token bucket, not a fixed window.** A window per minute lets a caller
+  spend a whole allowance in the last second of one window and again in the
+  first second of the next. A bucket absorbs bursts up to its size while
+  capping the sustained rate.
+- **The bucket runs as a Lua script inside Redis.** Read-modify-write from Go
+  is a race: two replicas reading "one token left" at the same instant both
+  allow, and the effective limit multiplies by the replica count. Redis
+  evaluates a script atomically. `TestRedis_SharesOneBucketAcrossInstances`
+  exists specifically to catch a regression here.
+- **The clock comes from the gateway, not from Redis.** Keeps the script
+  deterministic and replicable; instances need only agree on time to within a
+  refill interval, which NTP covers.
+- **Buckets carry a TTL.** Otherwise Redis grows one key per caller forever.
+- **Metered on the authenticated caller, never on the address.** Clients
+  behind one NAT would otherwise share an allowance, and a client that changes
+  address would get a fresh one. Forwarding headers are not trusted: anyone
+  can set them.
+- **Fail open on limiter errors, and log loudly.** A limiter outage becoming a
+  gateway outage is the larger failure.
+- **Integration tests need a real Redis** and run behind the `integration`
+  build tag, with a Redis service container in CI. Faking the script would
+  test nothing that matters.
+
+**Verifier** — passing. Smoke grew to 35 checks.
+
 ## Discarded ideas
 
 _Out-of-scope thoughts land here instead of in the code._

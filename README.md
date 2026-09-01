@@ -44,6 +44,27 @@ exactly when something is wrong. Starting with neither keys nor an explicit
 `GATEWAY_AUTH_DISABLED=true` is a startup error, so an open gateway is always
 a deliberate choice.
 
+## Rate limiting
+
+Every caller gets a token bucket: up to `GATEWAY_RATE_LIMIT_BURST` requests at
+once, refilled continuously at `GATEWAY_RATE_LIMIT_RPS` per second. A bucket
+absorbs bursts while capping the sustained rate, which a fixed window per
+minute cannot do — there, a caller spends a whole minute's allowance in the
+last second of one window and again in the first second of the next.
+
+With `GATEWAY_REDIS_URL` set, the bucket lives in Redis and every replica
+shares it. Without it the bucket is per process, so N replicas allow N times
+the intended rate — correct for one instance, wrong for a deployment.
+
+The check-and-consume runs as a Lua script inside Redis rather than as
+read-modify-write in Go. Two gateways reading "one token left" at the same
+instant would both allow their request; a script executes atomically, so the
+decision is indivisible however many instances are asking.
+
+Denials carry `Retry-After` and `X-RateLimit-*`, and a limiter outage fails
+open: briefly over-serving is a smaller failure than refusing every request
+because a side channel is down.
+
 ## Routing
 
 One OpenAI-shaped endpoint, several vendors behind it. The provider is chosen

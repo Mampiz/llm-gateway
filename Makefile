@@ -3,7 +3,7 @@
 # for a server to "finish compiling". CodeQL's autobuilder did exactly that.
 .DEFAULT_GOAL := build
 
-.PHONY: all run build build-image test test-race e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci dev fake smoke help
+.PHONY: all run build build-image test test-race test-integration e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci dev fake smoke help
 
 ## all: alias for build, the conventional default
 all: build
@@ -23,6 +23,12 @@ test:
 ## test-race: run the suite under the race detector
 test-race:
 	go test ./... -count=1 -race
+
+## test-integration: run the tests that need a real Redis
+test-integration:
+	@docker compose up -d redis
+	@until docker compose exec -T redis redis-cli ping >/dev/null 2>&1; do sleep 0.3; done
+	REDIS_URL=redis://localhost:6379/0 go test -tags integration ./... -count=1
 
 ## e2e: build the real binary and drive it against fake upstreams
 e2e:

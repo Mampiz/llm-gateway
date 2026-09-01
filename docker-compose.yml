@@ -17,7 +17,23 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       ANTHROPIC_DEFAULT_MAX_TOKENS: ${ANTHROPIC_DEFAULT_MAX_TOKENS:-4096}
+      GATEWAY_RATE_LIMIT_RPS: ${GATEWAY_RATE_LIMIT_RPS:-10}
+      GATEWAY_RATE_LIMIT_BURST: ${GATEWAY_RATE_LIMIT_BURST:-20}
+      GATEWAY_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Redis arrives in phase 4 for the distributed rate limiter and in phase 6
-  # for the response cache.
+  # Backs the distributed rate limiter. Without it the limit is per instance,
+  # which means N replicas allow N times the intended rate.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped

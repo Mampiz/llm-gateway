@@ -13,6 +13,21 @@ jobs:
   unit:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+
+    # The distributed rate limiter is a Lua script evaluated inside Redis.
+    # A fake would not exercise the property that makes it correct, so the
+    # integration tests run against a real one.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -22,6 +37,11 @@ jobs:
 
       - name: Unit tests with the race detector
         run: go test ./... -count=1 -race -coverprofile=coverage.out
+
+      - name: Integration tests against Redis
+        env:
+          REDIS_URL: redis://localhost:6379/0
+        run: go test -tags integration ./... -count=1 -race
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"

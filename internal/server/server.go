@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mampiz/llm-gateway/internal/auth"
 	"github.com/Mampiz/llm-gateway/internal/provider"
+	"github.com/Mampiz/llm-gateway/internal/ratelimit"
 )
 
 // Server holds everything the handlers need. Dependencies are injected
@@ -22,6 +23,9 @@ type Server struct {
 	// keys authenticates clients. A nil store means authentication is
 	// disabled, which config only allows when asked for explicitly.
 	keys auth.Store
+
+	// limiter meters callers. A nil limiter means rate limiting is off.
+	limiter ratelimit.Limiter
 
 	// streamIdle and streamHeartbeat govern a streaming response. Neither can
 	// be honoured by a loop that simply blocks on the next chunk, which is
@@ -53,6 +57,13 @@ func (s *Server) WithAuth(keys auth.Store) *Server {
 	return s
 }
 
+// WithRateLimiter attaches the limiter that meters callers. Passing nil
+// leaves the gateway unmetered.
+func (s *Server) WithRateLimiter(l ratelimit.Limiter) *Server {
+	s.limiter = l
+	return s
+}
+
 // WithStreamTimings overrides the streaming durations. Zero or negative values
 // leave the current one untouched.
 func (s *Server) WithStreamTimings(idle, heartbeat time.Duration) *Server {
@@ -76,7 +87,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	// Only the API surface is guarded: a health probe that needs a credential
 	// stops working exactly when it is most needed.
-	mux.Handle("POST /v1/chat/completions", s.requireAuth(http.HandlerFunc(s.handleChatCompletions)))
+	// Order matters: authenticate first so the limiter can meter a caller
+	// rather than an address.
+	mux.Handle("POST /v1/chat/completions",
+		s.requireAuth(s.rateLimit(http.HandlerFunc(s.handleChatCompletions))))
 
 	return chain(mux,
 		recoverer(s.logger), // outermost: catches panics from everything below
