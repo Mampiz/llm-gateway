@@ -94,9 +94,11 @@ smoke:
 
 ## chart: lint the Helm chart and validate what it renders
 chart:
+	@command -v kubeconform >/dev/null 2>&1 || \
+		go install github.com/yannh/kubeconform/cmd/kubeconform@latest
 	helm lint deploy/helm/llm-gateway
 	helm template gw deploy/helm/llm-gateway --set secrets.gatewayApiKeys="local:gw_local" \
-		| kubectl apply --dry-run=client -f -
+		| kubeconform -strict -summary
 
 ## bootstrap: take a fresh clone to a verified, running gateway
 bootstrap:

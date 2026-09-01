@@ -20,11 +20,15 @@ that already holds `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and
 that file ends up.
 
 ```bash
-helm lint ./deploy/helm/llm-gateway
-helm template gw ./deploy/helm/llm-gateway | kubectl apply --dry-run=client -f -
+make chart
 ```
 
-CI runs both on every push.
+That lints the chart and validates what it renders with `kubeconform`, which
+checks against the published Kubernetes schemas without needing a cluster.
+`kubectl apply --dry-run=client` sounds offline but still fetches the OpenAPI
+document from an API server, so it cannot stand in for this in CI.
+
+CI runs the same on every push, including the non-default value paths.
 
 ### What the chart sets that is easy to get wrong
 

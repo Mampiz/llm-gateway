@@ -20,31 +20,38 @@ jobs:
         with:
           version: latest
 
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+
       - name: Lint
         run: helm lint deploy/helm/llm-gateway
 
       # Rendering is not enough on its own: a chart can render happily into
       # manifests the API server rejects.
-      - name: Render and validate against the Kubernetes API
+      # kubeconform validates against the published Kubernetes schemas without
+      # needing a cluster. `kubectl --dry-run=client` sounds offline but still
+      # fetches the OpenAPI document from an API server, so it cannot run here.
+      - name: Install kubeconform
+        run: go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+
+      - name: Validate the default render
         run: |
           helm template gw deploy/helm/llm-gateway \
             --set secrets.gatewayApiKeys="ci:gw_ci" \
-            > /tmp/rendered.yaml
-          kubectl apply --dry-run=client -f /tmp/rendered.yaml
+            | kubeconform -strict -summary
 
-      - name: Render the non-default paths too
+      - name: Validate the non-default paths too
         run: |
+          # ServiceMonitor is a CRD, so its schema is not in the standard set;
+          # everything else still has to be valid.
           helm template gw deploy/helm/llm-gateway \
             --set secrets.existingSecret=my-secret \
             --set autoscaling.enabled=true \
             --set serviceMonitor.enabled=true \
-            --set redis.enabled=false \
             --set redis.url=redis://external:6379/0 \
-            > /tmp/rendered-alt.yaml
-          # The ServiceMonitor needs a CRD this cluster does not have, so only
-          # the rest is checked against the API.
-          grep -v -A100 'kind: ServiceMonitor' /tmp/rendered-alt.yaml > /tmp/core.yaml || true
-          kubectl apply --dry-run=client -f /tmp/rendered.yaml
+            | kubeconform -strict -summary -ignore-missing-schemas
 
       - name: Alerting rules and dashboard parse
         run: |

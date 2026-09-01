@@ -157,5 +157,5 @@ whatever the audit says is missing.
 **Verifier**
 ```
 make ci
-kubectl apply --dry-run=client -k deploy/    # manifests are valid
+make chart                                   # helm lint + offline schema validation
 ```
