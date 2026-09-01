@@ -115,7 +115,7 @@ make ci                     # lint + race + e2e + vuln + build
 
 ---
 
-## Sacrifice order if context runs out
+## Outcome
 
-1. F6 (cache) — the gateway is complete and honest without it.
-2. Nothing else. F1-F5 and F7 are the project.
+All seven phases closed, including the one marked NICE. Nothing was
+sacrificed.

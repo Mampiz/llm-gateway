@@ -3,7 +3,7 @@
 # for a server to "finish compiling". CodeQL's autobuilder did exactly that.
 .DEFAULT_GOAL := build
 
-.PHONY: all run build build-image test test-race test-integration e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci dev fake smoke help
+.PHONY: all bootstrap run build build-image test test-race test-integration e2e cover cover-html fmt fmt-check vet lint lint-go vuln trivy tidy ci dev fake smoke help
 
 ## all: alias for build, the conventional default
 all: build
@@ -91,6 +91,10 @@ ci: lint test-race e2e vuln build
 ## smoke: start everything, check every route, tear it down again
 smoke:
 	@./scripts/smoke.sh
+
+## bootstrap: take a fresh clone to a verified, running gateway
+bootstrap:
+	@./scripts/bootstrap.sh
 
 ## dev: run the gateway against a fake upstream and leave both up
 dev:

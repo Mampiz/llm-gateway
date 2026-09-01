@@ -193,6 +193,19 @@ New `internal/cache` package with in-memory and Redis stores, plus
 
 **Verifier** — passing. Smoke grew to 49 checks.
 
+### F7 · Bootstrap, README and final pass — closed
+
+`scripts/bootstrap.sh` takes a fresh clone to a verified, running gateway with
+Go and nothing else: no API key, no vendor network access, no database. It
+builds, runs both suites, drives the real binary through the smoke checks and
+prints a working API key.
+
+The README was rewritten around what the project demonstrates rather than what
+it contains, and its sections reordered into a reading order. The layout
+section now names the dependency rule the design rests on.
+
+**Verifier** — passing.
+
 ## Discarded ideas
 
 - **Semantic caching.** Listed as a bonus in the original plan. Needs an
