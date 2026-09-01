@@ -38,6 +38,10 @@ type streamDelta struct {
 
 const streamObject = "chat.completion.chunk"
 
+// errDraining is what a client is told when the gateway is shutting down
+// underneath a streamed answer.
+var errDraining = errors.New("gateway is shutting down, the answer is incomplete")
+
 // streamChatCompletions answers a streaming request by tunnelling the
 // provider's chunks to the client as Server-Sent Events.
 func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, req provider.ChatRequest) {
@@ -117,6 +121,15 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 		for stream.Next() {
 			select {
 			case ch <- stream.Current():
+			case <-s.draining:
+				// The process is going away. Ending the answer with an
+				// explanation beats having the connection cut from under the
+				// client when the shutdown deadline passes, and no [DONE],
+				// because the answer is not complete.
+				s.metrics.RequestFinished(served, req.Model, "draining", true, time.Since(started).Seconds())
+				writeSSEError(w, rc, errDraining)
+				return
+
 			case <-streamCtx.Done():
 				errCh <- streamCtx.Err()
 				return
@@ -190,6 +203,15 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 				s.metrics.RequestFinished(served, req.Model, "cancelled", true, time.Since(started).Seconds())
 				return
 			}
+
+		case <-s.draining:
+			// The process is going away. Ending the answer with an
+			// explanation beats having the connection cut from under the
+			// client when the shutdown deadline passes, and no [DONE],
+			// because the answer is not complete.
+			s.metrics.RequestFinished(served, req.Model, "draining", true, time.Since(started).Seconds())
+			writeSSEError(w, rc, errDraining)
+			return
 
 		case <-streamCtx.Done():
 			// Without this case the end of a stream is only noticed at the

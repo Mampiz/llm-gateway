@@ -606,3 +606,65 @@ func (e *endlessStream) Next() bool {
 func (e *endlessStream) Current() provider.Chunk { return e.current }
 func (e *endlessStream) Err() error              { return e.err }
 func (e *endlessStream) Close() error            { e.closed = true; return nil }
+
+// A rolling deploy sends SIGTERM while streams are in flight. Cutting them at
+// the end of the grace period gives the client a truncated answer with no
+// explanation, and leaves the process reporting a failed shutdown for what is
+// a completely normal event.
+func TestStreaming_DrainEndsStreamsCleanly(t *testing.T) {
+	chunks := make([]provider.Chunk, 200)
+	for i := range chunks {
+		chunks[i] = provider.Chunk{ID: "x", Model: "m", Content: "tick "}
+	}
+
+	p := streamingProvider(chunks, nil, 20*time.Millisecond)
+
+	reg := provider.NewRegistry()
+	reg.Register(p)
+	if err := reg.SetDefault(p.Name()); err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srvHandler := New(reg, logger, time.Second, "test")
+	h := srvHandler.Handler()
+
+	httpSrv := httptest.NewServer(h)
+	t.Cleanup(httpSrv.Close)
+
+	resp, err := http.Post(httpSrv.URL+"/v1/chat/completions", "application/json", strings.NewReader(streamBody)) //nolint:noctx // the test owns the lifetime
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Let a few chunks through, then start draining.
+	time.Sleep(100 * time.Millisecond)
+	start := time.Now()
+	srvHandler.Drain()
+
+	body, finished := readUntilQuiet(t, resp.Body, 5*time.Second)
+	if !finished {
+		t.Fatal("the stream kept running after the gateway began draining")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("draining took %v, want the stream ended promptly", elapsed)
+	}
+
+	if !strings.Contains(body, "tick") {
+		t.Errorf("what had already been sent was lost:\n%s", body)
+	}
+	if !strings.Contains(body, "error") {
+		t.Errorf("the client was never told why the answer stopped:\n%s", body)
+	}
+	if frames := sseFrames(t, body); len(frames) > 0 && frames[len(frames)-1] == "[DONE]" {
+		t.Error("a drained stream ended with [DONE], which claims a complete answer")
+	}
+}
+
+// Draining twice must not panic on an already-closed channel: a second
+// SIGTERM is not unusual.
+func TestServer_DrainIsIdempotent(t *testing.T) {
+	s := New(provider.NewRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)), time.Second, "test")
+	s.Drain()
+	s.Drain()
+}

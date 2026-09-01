@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -677,6 +678,82 @@ func TestDoesNotFallBackOnClientErrors(t *testing.T) {
 	}
 	if secondaryCalls.Load() != 0 {
 		t.Errorf("the secondary was asked the same malformed question %d times", secondaryCalls.Load())
+	}
+}
+
+// TestShutsDownCleanlyDuringAStream proves the drain path in the real binary:
+// SIGTERM while a stream is in flight must end with exit code zero, not with
+// the failure an orchestrator would read as a crash.
+func TestShutsDownCleanlyDuringAStream(t *testing.T) {
+	port := freePort(t)
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	cmd := exec.Command(binary)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("GATEWAY_ADDR=:%d", port),
+		"GATEWAY_LOG_LEVEL=error",
+		"GATEWAY_API_KEYS=e2e:"+testAPIKey,
+	)
+	var logs bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &logs, &logs
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("could not start the gateway: %v", err)
+	}
+	waitReady(t, base+"/healthz", cmd)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// The mock provider streams word by word with a delay, so this is still
+	// in flight when the signal arrives.
+	body := `{"model":"mock-1","messages":[{"role":"user","content":"a fairly long question to stream back"}],"stream":true}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read one frame so the stream is definitely open, then signal.
+	buf := make([]byte, 64)
+	if _, err := resp.Body.Read(buf); err != nil {
+		t.Fatalf("no first frame: %v", err)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signalling failed: %v", err)
+	}
+
+	// The stream must end on its own rather than being cut when the grace
+	// period expires.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		_, _ = io.ReadAll(resp.Body)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(10 * time.Second):
+		t.Error("the stream was never wound up after SIGTERM")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("the gateway exited with %v after a normal SIGTERM:\n%s", err, logs.String())
+		}
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the gateway never exited after SIGTERM")
 	}
 }
 

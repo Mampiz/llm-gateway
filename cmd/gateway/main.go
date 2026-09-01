@@ -28,6 +28,10 @@ import (
 	"github.com/Mampiz/llm-gateway/internal/server"
 )
 
+// shutdownGrace is how long in-flight requests get after the drain signal.
+// Streams are told to wind up first, so this only has to cover the tail.
+const shutdownGrace = 20 * time.Second
+
 // version is stamped at build time with -ldflags "-X main.version=...".
 // It stays "dev" for local builds.
 var version = "dev"
@@ -114,26 +118,27 @@ func run() error {
 		defer func() { _ = responses.Close() }()
 	}
 
+	gw := server.New(reg, logger, cfg.RequestTimeout, version).
+		WithAuth(keys).
+		WithCache(responses, cfg.CacheTTL, cfg.CacheScope).
+		WithMetrics(m, metricsHandler).
+		WithRateLimiter(limiter).
+		WithFallback(fallbacks,
+			provider.RetryPolicy{
+				Attempts:  cfg.RetryAttempts,
+				BaseDelay: cfg.RetryBaseDelay,
+				MaxDelay:  5 * time.Second,
+			},
+			provider.BreakerConfig{
+				Threshold: cfg.BreakerThreshold,
+				Cooldown:  cfg.BreakerCooldown,
+			}).
+		WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
+		WithStreamMaxDuration(cfg.StreamMaxDuration)
+
 	srv := &http.Server{
-		Addr: cfg.Addr,
-		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
-			WithAuth(keys).
-			WithCache(responses, cfg.CacheTTL, cfg.CacheScope).
-			WithMetrics(m, metricsHandler).
-			WithRateLimiter(limiter).
-			WithFallback(fallbacks,
-				provider.RetryPolicy{
-					Attempts:  cfg.RetryAttempts,
-					BaseDelay: cfg.RetryBaseDelay,
-					MaxDelay:  5 * time.Second,
-				},
-				provider.BreakerConfig{
-					Threshold: cfg.BreakerThreshold,
-					Cooldown:  cfg.BreakerCooldown,
-				}).
-			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
-			WithStreamMaxDuration(cfg.StreamMaxDuration).
-			Handler(),
+		Addr:    cfg.Addr,
+		Handler: gw.Handler(),
 
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -170,12 +175,24 @@ func run() error {
 		logger.Info("shutdown signal received, draining connections")
 	}
 
+	// Tell in-flight streamed answers to wind up before waiting on them. A
+	// stream can legitimately run for minutes, so without this the grace
+	// period below would always expire and every stream would be cut
+	// mid-frame with no explanation.
+	gw.Drain()
+
 	// Shutdown stops accepting new connections and waits for in-flight
 	// handlers to finish, up to this grace period.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return err
+		// The deadline passing is not a failure of the process: it means some
+		// connection outlived the grace period. Close it and exit cleanly, or
+		// an orchestrator reads a normal rolling deploy as a crash.
+		logger.Warn("shutdown grace period expired, closing remaining connections", "error", err)
+		_ = srv.Close()
+		return nil
 	}
 	logger.Info("gateway stopped cleanly")
 	return nil

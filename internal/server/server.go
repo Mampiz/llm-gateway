@@ -5,6 +5,7 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -60,6 +61,12 @@ type Server struct {
 	streamIdle      time.Duration
 	streamHeartbeat time.Duration
 
+	// draining is closed when the process is shutting down. Streamed answers
+	// can outlive any sensible grace period, so they are told to wind up
+	// rather than cut mid-frame when the deadline passes.
+	draining  chan struct{}
+	drainOnce sync.Once
+
 	// streamMaxDuration caps a whole streamed answer. The idle timeout only
 	// catches silence; an upstream that keeps emitting would otherwise hold a
 	// connection, a goroutine and a paid-for call indefinitely.
@@ -81,6 +88,7 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 		requestTimeout:    requestTimeout,
 		version:           version,
 		metrics:           metrics.New(prometheus.NewRegistry()),
+		draining:          make(chan struct{}),
 		streamIdle:        60 * time.Second,
 		streamHeartbeat:   15 * time.Second,
 		streamMaxDuration: 10 * time.Minute,
@@ -92,6 +100,19 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 func (s *Server) WithAuth(keys auth.Store) *Server {
 	s.keys = keys
 	return s
+}
+
+// Drain tells in-flight streamed answers to wind up.
+//
+// It exists because a streamed answer can legitimately run for minutes, far
+// past any grace period worth giving a shutdown. Without it a rolling deploy
+// cuts every stream mid-frame at the deadline, the client gets a truncated
+// answer with no explanation, and http.Server.Shutdown reports a failure for
+// what is an entirely normal event.
+//
+// Safe to call more than once: a second SIGTERM is not unusual.
+func (s *Server) Drain() {
+	s.drainOnce.Do(func() { close(s.draining) })
 }
 
 // WithStreamMaxDuration caps how long a single streamed answer may run. Zero
