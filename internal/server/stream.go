@@ -40,7 +40,7 @@ const streamObject = "chat.completion.chunk"
 
 // streamChatCompletions answers a streaming request by tunnelling the
 // provider's chunks to the client as Server-Sent Events.
-func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p provider.Provider, req provider.ChatRequest) {
+func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, req provider.ChatRequest) {
 	// Open the stream before touching the response. Until the first byte goes
 	// out the status is still ours to choose, so a provider that refuses to
 	// start can be reported as a proper HTTP error instead of an empty stream.
@@ -52,14 +52,17 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, p
 	streamCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	stream, err := p.ChatStream(streamCtx, req)
+	// Only the failure to *start* can fail over. Once frames have reached the
+	// client the response is committed, and switching vendors mid-answer
+	// would splice two different completions together.
+	stream, served, err := s.router.ChatStream(streamCtx, req)
 	if err != nil {
 		if errors.Is(err, provider.ErrStreamingNotSupported) {
 			writeError(w, http.StatusNotImplemented, "not_implemented",
-				"provider "+p.Name()+" does not support streaming")
+				"no configured provider for this model supports streaming")
 			return
 		}
-		s.writeProviderError(w, r, p.Name(), err)
+		s.writeProviderError(w, r, served, err)
 		return
 	}
 

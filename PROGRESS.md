@@ -100,6 +100,38 @@ external dependency in the project: `github.com/redis/go-redis/v9`.
 
 **Verifier** — passing. Smoke grew to 35 checks.
 
+### F4 · Automatic fallback and circuit breaker — closed
+
+New `provider.Router` owning the retry policy and one circuit breaker per
+provider, plus `provider.Breaker` as a three-state machine. The handler now
+goes through the router instead of resolving a single provider.
+
+**Decisions**
+
+- **Falling back rewrites the model, not just the provider.** `gpt-4o-mini`
+  does not exist on Anthropic, so a chain that only swapped vendors would
+  always fail. Configured as one variable: `model:fallback|fallback`.
+- **Only retryable errors fail over.** `provider.Error.Retryable`, written in
+  phase 1 for exactly this, decides. A 400 is returned verbatim and the chain
+  stops.
+- **Full jitter on the backoff.** The exponential curve matters less than the
+  jitter: without it, every client that failed together retries together.
+- **One probe at a time in half-open.** Letting a crowd through on the first
+  hopeful moment puts the provider straight back under the load that broke it.
+- **Cancellation is not a provider failure.** A caller giving up must not
+  count against a circuit or spend the rest of the chain.
+- **Unresolvable fallback targets are skipped, not fatal.** A chain naming a
+  model this deployment does not serve should degrade, not break a request
+  that could still be served.
+- **Streaming fails over only before the first frame.** After that the status
+  is committed and splicing two completions would corrupt the answer.
+- **One generic `do` serves both paths**, so buffered and streaming cannot
+  drift apart in how they fail over.
+- **`/healthz` reports circuit state.** It is the first thing to look at when
+  answers start coming from the wrong vendor.
+
+**Verifier** — passing. Smoke grew to 39 checks.
+
 ## Discarded ideas
 
 _Out-of-scope thoughts land here instead of in the code._

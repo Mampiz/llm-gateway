@@ -82,11 +82,29 @@ func run() error {
 		defer func() { _ = limiter.Close() }()
 	}
 
+	fallbacks, err := provider.ParseFallbacks(cfg.FallbackModels)
+	if err != nil {
+		return fmt.Errorf("parsing GATEWAY_FALLBACK_MODELS: %w", err)
+	}
+	if len(fallbacks) > 0 {
+		logger.Info("automatic fallback enabled", "chains", len(fallbacks))
+	}
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
 			WithAuth(keys).
 			WithRateLimiter(limiter).
+			WithFallback(fallbacks,
+				provider.RetryPolicy{
+					Attempts:  cfg.RetryAttempts,
+					BaseDelay: cfg.RetryBaseDelay,
+					MaxDelay:  5 * time.Second,
+				},
+				provider.BreakerConfig{
+					Threshold: cfg.BreakerThreshold,
+					Cooldown:  cfg.BreakerCooldown,
+				}).
 			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
 			Handler(),
 

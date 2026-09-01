@@ -84,6 +84,7 @@ json() { printf '%s' "$1"; }
 post() { echo -H 'Content-Type: application/json'; }
 
 cleanup() {
+  [ -n "${FB_PID:-}" ]   && kill "$FB_PID"   2>/dev/null
   [ -n "${RL_PID:-}" ]   && kill "$RL_PID"   2>/dev/null
   [ -n "${GW_PID:-}" ]   && kill "$GW_PID"   2>/dev/null
   [ -n "${FAKE_PID:-}" ] && kill "$FAKE_PID" 2>/dev/null
@@ -182,6 +183,35 @@ contains "mensaje del vendor conservado" "told to fail" "${CT[@]}" -d "$OPENAI_R
 
 kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null
 check "upstream caido -> 502"           502 "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+contains "healthz expone los circuitos"  "circuits" "${GW}/healthz"
+
+echo
+echo "== fallback automatico =="
+# Restart the fake so only the OpenAI dialect is unreachable is not possible
+# with one process, so instead point the gateway's primary at a dead port and
+# let the chain reach the live secondary.
+FB_PORT=$((GW_PORT + 2))
+./bin/fakeupstream -addr ":${FAKE_PORT}" >> /tmp/smoke-fake.log 2>&1 &
+FAKE_PID=$!
+sleep 1
+GATEWAY_ADDR=":${FB_PORT}" \
+GATEWAY_LOG_LEVEL=error \
+GATEWAY_API_KEYS="smoke:${GW_KEY}" \
+OPENAI_API_KEY=sk-fake-openai \
+OPENAI_BASE_URL="http://127.0.0.1:1/v1" \
+ANTHROPIC_API_KEY=sk-fake-anthropic \
+ANTHROPIC_BASE_URL="http://127.0.0.1:${FAKE_PORT}/v1" \
+GATEWAY_FALLBACK_MODELS="gpt-4o-mini:claude-sonnet-5" \
+GATEWAY_RETRY_BASE_DELAY=1ms \
+  ./bin/gateway > /tmp/smoke-fb.log 2>&1 &
+FB_PID=$!
+for _ in $(seq 40); do curl -sf "http://127.0.0.1:${FB_PORT}/healthz" >/dev/null 2>&1 && break; sleep 0.25; done
+
+FB="http://127.0.0.1:${FB_PORT}"
+check    "primario caido -> 200 via fallback" 200 "${CT[@]}" -d "$OPENAI_REQ" "${FB}/v1/chat/completions"
+contains "responde el proveedor secundario"   "anthropic heard" "${CT[@]}" -d "$OPENAI_REQ" "${FB}/v1/chat/completions"
+contains "el circuito del primario se abre"   "open" "${FB}/healthz"
+kill "$FB_PID" 2>/dev/null; wait "$FB_PID" 2>/dev/null
 
 echo
 echo "== rate limiting =="

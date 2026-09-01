@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -576,6 +577,106 @@ func TestRejectsUnauthenticatedRequests(t *testing.T) {
 	defer health.Body.Close()
 	if health.StatusCode != http.StatusOK {
 		t.Errorf("healthz status = %d, want 200 without a key", health.StatusCode)
+	}
+}
+
+// TestFallsBackToSecondProvider drives the whole resilience path through the
+// real binary: the primary is down, the chain rewrites the model and reaches a
+// different vendor, and the client never learns any of it happened.
+func TestFallsBackToSecondProvider(t *testing.T) {
+	var primaryCalls atomic.Int32
+
+	// A primary that is comprehensively unavailable.
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":{"message":"the primary is having a bad day","type":"server_error"}}`)
+	}))
+	t.Cleanup(down.Close)
+
+	base := gateway(t, map[string]string{
+		"OPENAI_API_KEY":           "sk-e2e",
+		"OPENAI_BASE_URL":          down.URL,
+		"ANTHROPIC_API_KEY":        "sk-ant-e2e",
+		"ANTHROPIC_BASE_URL":       fakeAnthropic(t, nil, nil),
+		"GATEWAY_FALLBACK_MODELS":  "gpt-4o-mini:claude-sonnet-5",
+		"GATEWAY_RETRY_BASE_DELAY": "1ms",
+	})
+
+	status, body := post(t, base, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: the fallback should have served this (%v)", status, body)
+	}
+
+	// The answer came from the other vendor, translated into the one dialect
+	// the client speaks.
+	if primaryCalls.Load() == 0 {
+		t.Error("the primary was never tried")
+	}
+	choices, _ := body["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("choices = %v, want one", body["choices"])
+	}
+	choice, _ := choices[0].(map[string]any)
+	message, _ := choice["message"].(map[string]any)
+	if content, _ := message["content"].(string); !strings.Contains(content, "from anthropic") {
+		t.Errorf("content = %q, want the fallback vendor's answer", content)
+	}
+
+	// And the failing provider is now out of rotation rather than being
+	// retried on every request.
+	resp, err := http.Get(base + "/healthz") //nolint:noctx // trivial probe
+	if err != nil {
+		t.Fatalf("healthz failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var health struct {
+		Circuits map[string]string `json:"circuits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatalf("healthz is not JSON: %v", err)
+	}
+	if health.Circuits["openai"] == "" {
+		t.Errorf("healthz reports no circuit for the failing provider: %v", health.Circuits)
+	}
+}
+
+// TestDoesNotFallBackOnClientErrors proves the chain distinguishes an outage
+// from a malformed request. Asking a second vendor the same bad question
+// wastes their time and the caller's.
+func TestDoesNotFallBackOnClientErrors(t *testing.T) {
+	var secondaryCalls atomic.Int32
+
+	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"unknown parameter","type":"invalid_request_error"}}`)
+	}))
+	t.Cleanup(rejecting.Close)
+
+	counting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondaryCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, anthropicBody)
+	}))
+	t.Cleanup(counting.Close)
+
+	base := gateway(t, map[string]string{
+		"OPENAI_API_KEY":          "sk-e2e",
+		"OPENAI_BASE_URL":         rejecting.URL,
+		"ANTHROPIC_API_KEY":       "sk-ant-e2e",
+		"ANTHROPIC_BASE_URL":      counting.URL,
+		"GATEWAY_FALLBACK_MODELS": "gpt-4o-mini:claude-sonnet-5",
+	})
+
+	status, _ := post(t, base, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want the 400 propagated verbatim", status)
+	}
+	if secondaryCalls.Load() != 0 {
+		t.Errorf("the secondary was asked the same malformed question %d times", secondaryCalls.Load())
 	}
 }
 

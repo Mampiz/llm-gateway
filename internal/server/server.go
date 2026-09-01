@@ -24,6 +24,10 @@ type Server struct {
 	// disabled, which config only allows when asked for explicitly.
 	keys auth.Store
 
+	// router resolves a model to the ordered providers that may serve it and
+	// owns the retry policy and the circuit breakers.
+	router *provider.Router
+
 	// limiter meters callers. A nil limiter means rate limiting is off.
 	limiter ratelimit.Limiter
 
@@ -41,7 +45,10 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 		version = "dev"
 	}
 	return &Server{
-		registry:        reg,
+		registry: reg,
+		// Always present, so there is one request path rather than two.
+		// Without configured fallbacks it simply retries the one provider.
+		router:          provider.NewRouter(reg, nil, provider.DefaultRetryPolicy(), provider.BreakerConfig{}),
 		logger:          logger,
 		requestTimeout:  requestTimeout,
 		version:         version,
@@ -54,6 +61,13 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 // leaves the gateway unauthenticated.
 func (s *Server) WithAuth(keys auth.Store) *Server {
 	s.keys = keys
+	return s
+}
+
+// WithFallback configures the chain of models to try when one fails, along
+// with the retry policy and the circuit breaker settings.
+func (s *Server) WithFallback(fallbacks map[string][]string, policy provider.RetryPolicy, bcfg provider.BreakerConfig) *Server {
+	s.router = provider.NewRouter(s.registry, fallbacks, policy, bcfg)
 	return s
 }
 

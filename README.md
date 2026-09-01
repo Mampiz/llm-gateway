@@ -44,6 +44,38 @@ exactly when something is wrong. Starting with neither keys nor an explicit
 `GATEWAY_AUTH_DISABLED=true` is a startup error, so an open gateway is always
 a deliberate choice.
 
+## Automatic fallback
+
+When a provider fails, rate-limits or times out, the request is retried and
+then handed to the next model in its chain:
+
+```bash
+GATEWAY_FALLBACK_MODELS="gpt-4o-mini:claude-sonnet-5,claude-sonnet-5:gpt-4o-mini"
+```
+
+Falling back changes the model as well as the provider, because the same model
+rarely exists on two vendors. The client never learns any of it happened.
+
+Three rules keep this from making things worse:
+
+- **Only retryable failures fail over.** A 400 is the caller's mistake;
+  asking a second vendor the same malformed question wastes their time too.
+- **Backoff is jittered.** Without jitter, every client that failed at the
+  same instant retries at the same instant, and the upstream takes a
+  synchronised wave exactly when it can least afford one.
+- **A circuit breaker takes a failing provider out of rotation.** After
+  `GATEWAY_BREAKER_THRESHOLD` consecutive failures it is skipped entirely for
+  `GATEWAY_BREAKER_COOLDOWN`, then a single probe decides whether it is back.
+  Hammering a struggling upstream slows its recovery and costs every caller
+  the latency of a doomed attempt.
+
+`/healthz` reports the state of every circuit, which is the first thing worth
+looking at when the gateway starts answering slowly or from the wrong vendor.
+
+Streaming fails over only before the first frame reaches the client. After
+that the response is committed, and switching vendors mid-answer would splice
+two different completions together.
+
 ## Rate limiting
 
 Every caller gets a token bucket: up to `GATEWAY_RATE_LIMIT_BURST` requests at

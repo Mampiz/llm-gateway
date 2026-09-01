@@ -75,6 +75,28 @@ type Config struct {
 	// instance and wrong for several.
 	RedisURL string
 
+	// FallbackModels maps a requested model to the models to try after it,
+	// in order:  gpt-4o-mini:claude-sonnet-5,claude-sonnet-5:gpt-4o-mini
+	// Falling back changes the model as well as the provider, because the
+	// same model rarely exists on two vendors.
+	FallbackModels string
+
+	// RetryAttempts is how many times one provider is tried before the chain
+	// moves on, the first attempt included.
+	RetryAttempts int
+
+	// RetryBaseDelay is the wait before a second attempt; each further one
+	// doubles it, with full jitter applied.
+	RetryBaseDelay time.Duration
+
+	// BreakerThreshold is how many consecutive failures take a provider out
+	// of rotation.
+	BreakerThreshold int
+
+	// BreakerCooldown is how long a tripped provider is left alone before a
+	// single probe is allowed through.
+	BreakerCooldown time.Duration
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
@@ -102,6 +124,12 @@ func Load() (*Config, error) {
 		RateLimitRPS:   envFloat("GATEWAY_RATE_LIMIT_RPS", 10),
 		RateLimitBurst: envInt("GATEWAY_RATE_LIMIT_BURST", 20),
 		RedisURL:       env("GATEWAY_REDIS_URL", ""),
+
+		FallbackModels:   env("GATEWAY_FALLBACK_MODELS", ""),
+		RetryAttempts:    envInt("GATEWAY_RETRY_ATTEMPTS", 2),
+		RetryBaseDelay:   envDuration("GATEWAY_RETRY_BASE_DELAY", 200*time.Millisecond),
+		BreakerThreshold: envInt("GATEWAY_BREAKER_THRESHOLD", 5),
+		BreakerCooldown:  envDuration("GATEWAY_BREAKER_COOLDOWN", 30*time.Second),
 
 		LogLevel: env("GATEWAY_LOG_LEVEL", "info"),
 	}

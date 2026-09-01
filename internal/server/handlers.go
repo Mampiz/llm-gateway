@@ -22,6 +22,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"status":    "ok",
 		"version":   s.version,
 		"providers": s.registry.Names(),
+		// The first thing worth looking at when a gateway starts answering
+		// slowly or from the wrong vendor.
+		"circuits": s.router.Breakers(),
 	})
 }
 
@@ -54,25 +57,26 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "field \"messages\" must not be empty")
 		return
 	}
-	p, err := s.registry.For(req.Model)
-	if err != nil {
+	// A model nobody serves is the caller's mistake, not an upstream failure.
+	if _, err := s.registry.For(req.Model); errors.Is(err, provider.ErrNoProvider) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 
 	if req.Stream {
-		s.streamChatCompletions(w, r, p, req)
+		s.streamChatCompletions(w, r, req)
 		return
 	}
 
 	// r.Context() is already cancelled when the client disconnects. Layering a
 	// deadline on top bounds how long a hung upstream can hold this handler.
+	// The budget covers the whole chain, retries and fallbacks included.
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
 
-	resp, err := p.Chat(ctx, req)
+	resp, served, err := s.router.Chat(ctx, req)
 	if err != nil {
-		s.writeProviderError(w, r, p.Name(), err)
+		s.writeProviderError(w, r, served, err)
 		return
 	}
 

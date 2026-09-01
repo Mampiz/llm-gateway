@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +18,11 @@ type Registry struct {
 	routes []route
 	def    Provider
 }
+
+// ErrNoProvider reports a model no configured provider serves. It is the
+// caller's mistake, not an upstream failure, and the HTTP layer maps it to a
+// 400 rather than a 502.
+var ErrNoProvider = errors.New("no provider is registered for model")
 
 type route struct {
 	prefix string
@@ -63,7 +69,7 @@ func (r *Registry) For(model string) (Provider, error) {
 	if r.def != nil {
 		return r.def, nil
 	}
-	return nil, fmt.Errorf("no provider is registered for model %q", model)
+	return nil, fmt.Errorf("%w %q", ErrNoProvider, model)
 }
 
 // ByName returns a provider by its own name, which is how phase 5 will pick an
