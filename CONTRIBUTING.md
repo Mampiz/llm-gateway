@@ -57,7 +57,7 @@ The point of the layout is that this touches no existing file:
 1. Create `internal/provider/<vendor>/`.
 2. Implement `provider.Provider`: `Name`, `Chat`, `ChatStream`.
 3. Keep every vendor type unexported. That vocabulary must not leave the
-   package — the core knows none of it, and that is what keeps the next
+   package. The core knows none of it, and that is what keeps the next
    provider cheap.
 4. Translate both ways, and be explicit about what does not map. Dropping a
    field silently is worse than rejecting it.
@@ -67,5 +67,21 @@ The point of the layout is that this touches no existing file:
 
 ## Commits
 
-See [COMMIT_STYLE.md](COMMIT_STYLE.md). Conventional commits, imperative,
-lowercase, one line, no body.
+Conventional commits, one line, no body:
+
+```
+type(scope): subject
+```
+
+- **Types:** `feat`, `fix`, `test`, `ci`, `docs`, `chore`, and `dev` for
+  developer tooling such as the fake upstream or the smoke script.
+- **Scope** in parentheses when the change sits in one package, omitted when it
+  spans several.
+- **Imperative and lowercase** after the colon, no trailing period.
+- 45 to 80 characters, describing the change rather than the process.
+
+```
+feat(openai): implement non-streaming chat completions passthrough
+fix(server): abort instead of splicing an error into a started response
+ci: split workflows, add e2e suite, linting, security scanning and MIT license
+```

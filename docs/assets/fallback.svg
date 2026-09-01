@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="564" height="477" viewBox="0 0 564 477" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13" role="img" aria-label="the primary is down and the client never finds out">
+<defs><clipPath id="r"><rect width="564" height="477" rx="10"/></clipPath></defs>
+<g clip-path="url(#r)"><rect width="564" height="477" fill="#0d1117"/>
+<rect width="564" height="38" fill="#161b22"/>
+<circle cx="20" cy="19" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="19" r="6" fill="#febc2e"/>
+<circle cx="60" cy="19" r="6" fill="#28c840"/>
+<text x="282.0" y="24" fill="#8b949e" font-size="12" text-anchor="middle">the primary is down and the client never finds out</text>
+</g>
+<rect width="563" height="476" x="0.5" y="0.5" rx="10" fill="none" stroke="#30363d"/>
+<text x="22" y="58" fill="#39c5cf" xml:space="preserve">$ curl -s localhost:8080/v1/chat/completions \</text>
+<text x="22" y="79" fill="#39c5cf" xml:space="preserve">    -H "Authorization: Bearer $KEY" \</text>
+<text x="22" y="100" fill="#39c5cf" xml:space="preserve">    -d '{"model":"gpt-4o-mini", ...}'   # OpenAI is down</text>
+<text x="22" y="121" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="22" y="142" fill="#8b949e" xml:space="preserve">{</text>
+<text x="22" y="163" fill="#8b949e" xml:space="preserve">  "id": "msg_fake",</text>
+<text x="22" y="184" fill="#3fb950" xml:space="preserve">  "model": "claude-sonnet-5",          &lt;- served by the fallback</text>
+<text x="22" y="205" fill="#8b949e" xml:space="preserve">  "choices": [{ "message": {</text>
+<text x="22" y="226" fill="#8b949e" xml:space="preserve">      "role": "assistant",</text>
+<text x="22" y="247" fill="#8b949e" xml:space="preserve">      "content": "anthropic heard: hola" } }],</text>
+<text x="22" y="268" fill="#8b949e" xml:space="preserve">  "usage": { "prompt_tokens": 11, "completion_tokens": 5,</text>
+<text x="22" y="289" fill="#8b949e" xml:space="preserve">             "total_tokens": 16 }</text>
+<text x="22" y="310" fill="#8b949e" xml:space="preserve">}</text>
+<text x="22" y="331" fill="#c9d1d9" xml:space="preserve"></text>
+<text x="22" y="352" fill="#39c5cf" xml:space="preserve">$ curl -s localhost:8080/healthz | jq .circuits</text>
+<text x="22" y="373" fill="#8b949e" xml:space="preserve">{</text>
+<text x="22" y="394" fill="#8b949e" xml:space="preserve">  "anthropic": "closed",</text>
+<text x="22" y="415" fill="#3fb950" xml:space="preserve">  "openai": "open"                     &lt;- out of rotation</text>
+<text x="22" y="436" fill="#8b949e" xml:space="preserve">}</text>
+</svg>

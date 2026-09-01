@@ -11,8 +11,8 @@ helm install gw ./deploy/helm/llm-gateway \
 
 The chart brings its own Redis, which the rate limiter and the cache share.
 Point `redis.url` at one you manage to use that instead, or set
-`redis.enabled=false` to run without — at which point both become per instance,
-and N replicas allow N times the intended rate. The chart says so on install.
+`redis.enabled=false` to run without. Both then become per instance, so N
+replicas allow N times the intended rate. The chart says so on install.
 
 Credentials belong in a Secret you manage. `secrets.existingSecret` takes one
 that already holds `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and
@@ -48,10 +48,10 @@ CI runs the same on every push, including the non-default value paths.
 
 ## Observability
 
-- [`prometheus-rules.yaml`](prometheus-rules.yaml) — alerts on symptoms a user
+- [`prometheus-rules.yaml`](prometheus-rules.yaml): alerts on symptoms a user
   would notice, not on causes. A slow provider only matters if it is making
   answers slow.
-- [`grafana-dashboard.json`](grafana-dashboard.json) — import into Grafana and
+- [`grafana-dashboard.json`](grafana-dashboard.json): import into Grafana and
   pick a Prometheus data source.
 
 Set `serviceMonitor.enabled=true` if the Prometheus Operator is installed.

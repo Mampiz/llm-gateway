@@ -1,6 +1,13 @@
-# Progress
+# Design decisions
 
-## Done before this plan
+Why the code is the way it is. Every entry records a decision, the alternative
+it was chosen over, and what it costs. The rejected ideas are at the bottom,
+with the reason they were rejected.
+
+If you are wondering why something is written a particular way, the answer is
+probably here rather than in a comment.
+
+## Foundations
 
 - **Phase 1 · Basic proxy.** Single endpoint forwarding to OpenAI, full HTTP
   cycle, error taxonomy with `Retryable`, graceful shutdown.
@@ -13,9 +20,9 @@
 - **Infrastructure.** 6 CI workflows, e2e suite, smoke script, fake upstream,
   10 MB scratch image, release pipeline with SBOM, security scanning.
 
-## Log
+## The record
 
-### F1 · Anthropic streaming — closed
+### Anthropic streaming
 
 Implemented `anthropic.ChatStream` and its iterator in a new `stream.go`,
 mirroring the OpenAI one. Phase 3 is now complete: both vendors stream.
@@ -40,9 +47,7 @@ mirroring the OpenAI one. Phase 3 is now complete: both vendors stream.
   streaming paths share one mapping table instead of two copies that could
   drift. Behaviour unchanged; the existing tests cover it.
 
-**Verifier** — passing.
-
-### F2 · Gateway API keys and authentication — closed
+### Gateway API keys and authentication
 
 New `internal/auth` package, a `requireAuth` middleware, and the caller's name
 carried in the request context for the phases that follow.
@@ -65,9 +70,9 @@ carried in the request context for the phases that follow.
 - **The 401 never echoes what was presented**, and an unknown key logs
   identically to a malformed one.
 
-**Verifier** — passing. Smoke grew to 29 checks.
+ Smoke grew to 29 checks.
 
-### F3 · Distributed rate limiting — closed
+### Distributed rate limiting
 
 New `internal/ratelimit` package with two implementations behind one
 interface, plus a middleware that meters every authenticated caller. First
@@ -98,9 +103,9 @@ external dependency in the project: `github.com/redis/go-redis/v9`.
   build tag, with a Redis service container in CI. Faking the script would
   test nothing that matters.
 
-**Verifier** — passing. Smoke grew to 35 checks.
+ Smoke grew to 35 checks.
 
-### F4 · Automatic fallback and circuit breaker — closed
+### Automatic fallback and circuit breaker
 
 New `provider.Router` owning the retry policy and one circuit breaker per
 provider, plus `provider.Breaker` as a three-state machine. The handler now
@@ -130,9 +135,9 @@ goes through the router instead of resolving a single provider.
 - **`/healthz` reports circuit state.** It is the first thing to look at when
   answers start coming from the wrong vendor.
 
-**Verifier** — passing. Smoke grew to 39 checks.
+ Smoke grew to 39 checks.
 
-### F5 · Prometheus metrics — closed
+### Prometheus metrics
 
 New `internal/metrics` package and a `/metrics` endpoint, with recording hooks
 in both the buffered and the streaming paths.
@@ -160,9 +165,9 @@ in both the buffered and the streaming paths.
 - **A dedicated registry, not the default one.** The process publishes what it
   chooses to, not whatever a dependency happened to register.
 
-**Verifier** — passing. Smoke grew to 46 checks.
+ Smoke grew to 46 checks.
 
-### F6 · Response cache — closed
+### Response cache
 
 New `internal/cache` package with in-memory and Redis stores, plus
 `singleflight` in front of it.
@@ -191,27 +196,9 @@ New `internal/cache` package with in-memory and Redis stores, plus
 - **Off by default.** Reusing an answer is a product decision, not a default
   the operator should discover from a bill.
 
-**Verifier** — passing. Smoke grew to 49 checks.
+ Smoke grew to 49 checks.
 
-### F7 · Bootstrap, README and final pass — closed
-
-`scripts/bootstrap.sh` takes a fresh clone to a verified, running gateway with
-Go and nothing else: no API key, no vendor network access, no database. It
-builds, runs both suites, drives the real binary through the smoke checks and
-prints a working API key.
-
-The README was rewritten around what the project demonstrates rather than what
-it contains, and its sections reordered into a reading order. The layout
-section now names the dependency rule the design rests on.
-
-**Verifier** — passing.
-
-Final pass also added integration tests for the Redis cache, which had none:
-serialisation round trip, expiry, corrupt entries reading as a miss, and an
-entry stored by one instance being readable by another. Coverage there went
-from 53.8% to 84.6%.
-
-### F8 · Bug hunt — closed
+### Bug hunt
 
 Eight defects found by reading every package and reproducing each one with a
 failing test before fixing it. Every fix carries the test that proves it.
@@ -258,46 +245,6 @@ Two more, outside the gateway itself:
 Also fixed while reading: unusable zero durations accepted silently, response
 bodies closed without draining (so connections could not be reused), and a
 plain mutex on the metrics hot path.
-
-**Verifier** — passing.
-
-### F9 · Documentation — closed
-
-- **`docs/ARCHITECTURE.md`** — the shape of a request, the dependency rule, the
-  two dialects side by side, how streaming is multiplexed, and where state
-  lives. Four Mermaid diagrams, each showing a mechanism rather than decorating
-  a heading.
-- **`docs/OPERATIONS.md`** — organised by symptom, not by feature. What to look
-  at when answers come from the wrong provider, when latency jumps, when clients
-  see 429s the vendor did not send, when streams die, when a proxy cuts them.
-  Each entry names the metric and the knob.
-- **`CONTRIBUTING.md`** — the loop, what each test layer is for, the house
-  style, and how to add a provider without editing an existing file.
-- **`CHANGELOG.md`** — Keep a Changelog format, with the bug hunt written up
-  honestly rather than hidden under "various fixes".
-- Every package already carried a doc comment; `go doc ./internal/...` is clean.
-
-### F10 · Employability pass — closed
-
-What makes the repository read as production work rather than an exercise:
-
-- **A Helm chart** (`deploy/helm/llm-gateway`) with its own Redis, an HPA, a
-  PodDisruptionBudget, a ServiceMonitor, and the pod hardening the scratch image
-  allows. It renders the non-obvious things right: a grace period longer than
-  the drain, a startup probe distinct from the liveness one, a config checksum
-  so a ConfigMap change actually rolls the pods, and Redis with `allkeys-lru`
-  and no persistence because both its users are caches.
-- **A "Test Chart" workflow** that lints, renders and validates the manifests
-  against the Kubernetes API, plus the non-default value paths. Rendering alone
-  is not enough: a chart can render happily into manifests the API rejects.
-- **Alerting rules** written against symptoms a user would notice rather than
-  causes, and a **Grafana dashboard** whose panel forms follow the question:
-  a stat for the headline, a state timeline for circuit state, timeseries for
-  everything that changes over time, and no dual axes anywhere.
-- **`deploy/README.md`** explaining the settings that are easy to get wrong.
-- **A CHANGELOG and a v1.0.0 tag.**
-
-**Verifier** — `make chart` and `make ci` passing.
 
 ## Discarded ideas
 

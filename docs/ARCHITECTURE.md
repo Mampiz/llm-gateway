@@ -2,7 +2,7 @@
 
 How the gateway is put together and why. For what each knob does, see the
 [README](../README.md); for the decisions and their reasoning as they were
-made, see [PROGRESS.md](../PROGRESS.md).
+made, see [DECISIONS.md](DECISIONS.md).
 
 ## The shape of a request
 
@@ -83,7 +83,7 @@ envelope, SSE parsing and the translation both ways. None of it is visible from
 outside the package. The gateway supplies Anthropic's mandatory `max_tokens`
 itself, because leaking that requirement to clients would mean the same request
 is valid or invalid depending on which vendor happens to be behind the model
-name — and would break failover for every request that omits it.
+name. It would also break failover for every request that omits it.
 
 ## Streaming
 
@@ -151,8 +151,8 @@ skipped. Each is a smaller failure than the alternative.
 |---|---|---|
 | Rate limit buckets | correct for one instance | Redis, via a Lua script |
 | Response cache | replicas miss each other's entries | Redis |
-| Circuit breakers | per instance, deliberately | — |
-| API keys | loaded at startup, as digests | — |
+| Circuit breakers | per instance, deliberately | n/a |
+| API keys | loaded at startup, as digests | n/a |
 
 The limiter needs atomicity because two replicas both reading "one token left"
 both allow, and the effective limit multiplies by the instance count. The cache
