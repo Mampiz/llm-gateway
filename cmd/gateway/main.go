@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/Mampiz/llm-gateway/internal/cache"
 	"github.com/Mampiz/llm-gateway/internal/config"
 	"github.com/Mampiz/llm-gateway/internal/metrics"
 	"github.com/Mampiz/llm-gateway/internal/provider"
@@ -105,10 +106,19 @@ func run() error {
 	m := metrics.New(promReg)
 	metricsHandler := promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
 
+	responses, err := buildCache(ctxStartup, cfg, logger)
+	if err != nil {
+		return err
+	}
+	if responses != nil {
+		defer func() { _ = responses.Close() }()
+	}
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
 			WithAuth(keys).
+			WithCache(responses, cfg.CacheTTL, cfg.CacheScope).
 			WithMetrics(m, metricsHandler).
 			WithRateLimiter(limiter).
 			WithFallback(fallbacks,
@@ -168,6 +178,31 @@ func run() error {
 	}
 	logger.Info("gateway stopped cleanly")
 	return nil
+}
+
+// buildCache picks where completed answers live: Redis when one is
+// configured, this process otherwise, and nowhere when the TTL is zero.
+//
+// The in-process one is merely unhelpful across replicas rather than wrong:
+// they miss on each other's entries, which costs money, not correctness.
+func buildCache(ctx context.Context, cfg *config.Config, logger *slog.Logger) (cache.Cache, error) {
+	if cfg.CacheTTL <= 0 {
+		return nil, nil
+	}
+
+	if cfg.RedisURL == "" {
+		logger.Info("response cache is in-process",
+			"ttl", cfg.CacheTTL, "scope", cfg.CacheScope, "max_entries", cfg.CacheMaxEntries)
+		return cache.NewMemory(cfg.CacheMaxEntries), nil
+	}
+
+	c, err := cache.NewRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		return nil, fmt.Errorf("connecting the response cache: %w", err)
+	}
+	logger.Info("response cache is shared through redis",
+		"ttl", cfg.CacheTTL, "scope", cfg.CacheScope)
+	return c, nil
 }
 
 // buildLimiter picks the rate limiter that matches the deployment: Redis when

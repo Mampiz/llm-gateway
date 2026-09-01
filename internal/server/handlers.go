@@ -79,7 +79,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	defer done()
 	started := time.Now()
 
-	resp, served, err := s.router.Chat(ctx, req)
+	resp, served, cached, err := s.cachedChat(ctx, r, req)
 	if err != nil {
 		s.metrics.RequestFinished(served, req.Model, outcomeFor(err), false, time.Since(started).Seconds())
 		s.recordUpstreamError(served, err)
@@ -87,8 +87,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.metrics.RequestFinished(served, req.Model, "ok", false, time.Since(started).Seconds())
-	s.metrics.Tokens(served, resp.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+	if cached {
+		w.Header().Set(cacheHeader, cacheHit)
+		s.metrics.RequestFinished(served, req.Model, "cache_hit", false, time.Since(started).Seconds())
+	} else {
+		w.Header().Set(cacheHeader, cacheMiss)
+		s.metrics.RequestFinished(served, req.Model, "ok", false, time.Since(started).Seconds())
+		// Only a real call spends tokens. Counting a cache hit again would
+		// inflate the cost the dashboard reports.
+		s.metrics.Tokens(served, resp.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+	}
 	s.metrics.CircuitStates(s.router.Breakers())
 
 	writeJSON(w, http.StatusOK, resp)

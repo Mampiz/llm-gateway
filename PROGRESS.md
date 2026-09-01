@@ -162,6 +162,47 @@ in both the buffered and the streaming paths.
 
 **Verifier** — passing. Smoke grew to 46 checks.
 
+### F6 · Response cache — closed
+
+New `internal/cache` package with in-memory and Redis stores, plus
+`singleflight` in front of it.
+
+**Decisions**
+
+- **Exact match, not semantic.** Semantic caching needs embeddings and a
+  similarity threshold, and returns the wrong answer the moment the threshold
+  is off. This one either matches or it does not.
+- **The key is a digest of a struct, not a concatenation.** Field boundaries
+  stay unambiguous, so a model `a` with message `bc` cannot collide with model
+  `ab` and message `c`. Unmodelled vendor parameters are included, since one
+  of them can change the answer completely.
+- **`singleflight` collapses identical concurrent requests.** This is the case
+  a plain lookup cannot help with: under a burst of the same question none of
+  the copies has stored anything yet, so every one would go upstream.
+- **A cache failure degrades to a miss.** A broken cache makes the gateway
+  slower, never broken.
+- **Cache hits do not count tokens.** Counting them again would inflate the
+  cost the dashboard reports for something that cost nothing.
+- **Redis needs no Lua here**, unlike the rate limiter: storing an answer twice
+  is redundant, whereas two replicas both spending the last token is wrong.
+- **Streaming is not cached.** Replaying a stream faithfully needs the frame
+  timing too, and accumulating a copy while forwarding adds a failure mode to
+  the hot path for a case that repeats far less often.
+- **Off by default.** Reusing an answer is a product decision, not a default
+  the operator should discover from a bill.
+
+**Verifier** — passing. Smoke grew to 49 checks.
+
 ## Discarded ideas
 
-_Out-of-scope thoughts land here instead of in the code._
+- **Semantic caching.** Listed as a bonus in the original plan. Needs an
+  embedding model in the request path and a similarity threshold that is wrong
+  in both directions; the exact-match cache is honest about what it does.
+- **Caching streamed answers.** Would need to accumulate a copy while
+  forwarding and replay frame timing on a hit. Real, but it adds a failure
+  mode to the hot path for the case that repeats least.
+- **LRU eviction in the in-memory cache.** Recency tracking means a linked
+  list and a write on every read; for entries that expire on a timer anyway it
+  buys very little.
+- **Per-caller labels on the rate limit metric.** An unbounded,
+  attacker-controlled label dimension is how a Prometheus server dies.

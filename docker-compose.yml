@@ -20,6 +20,8 @@ services:
       GATEWAY_RATE_LIMIT_RPS: ${GATEWAY_RATE_LIMIT_RPS:-10}
       GATEWAY_RATE_LIMIT_BURST: ${GATEWAY_RATE_LIMIT_BURST:-20}
       GATEWAY_REDIS_URL: redis://redis:6379/0
+      GATEWAY_CACHE_TTL: ${GATEWAY_CACHE_TTL:-0}
+      GATEWAY_CACHE_SCOPE: ${GATEWAY_CACHE_SCOPE:-shared}
     depends_on:
       redis:
         condition: service_healthy

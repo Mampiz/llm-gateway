@@ -9,7 +9,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/Mampiz/llm-gateway/internal/auth"
+	"github.com/Mampiz/llm-gateway/internal/cache"
 	"github.com/Mampiz/llm-gateway/internal/metrics"
 	"github.com/Mampiz/llm-gateway/internal/provider"
 	"github.com/Mampiz/llm-gateway/internal/ratelimit"
@@ -37,6 +40,16 @@ type Server struct {
 	// metrics publishes what the gateway is doing. Never nil: a no-op
 	// registry keeps the recording calls free of nil checks.
 	metrics *metrics.Metrics
+
+	// cache stores completed answers. A nil cache means caching is off.
+	cache      cache.Cache
+	cacheTTL   time.Duration
+	cacheScope string // "shared" or "caller"
+
+	// inflight collapses identical concurrent requests, so a cold cache being
+	// hit by a hundred copies of the same question fetches one answer rather
+	// than a hundred.
+	inflight singleflight.Group
 
 	// limiter meters callers. A nil limiter means rate limiting is off.
 	limiter ratelimit.Limiter
@@ -89,6 +102,15 @@ func (s *Server) WithMetrics(m *metrics.Metrics, h http.Handler) *Server {
 		s.metrics = m
 	}
 	s.metricsHandler = h
+	return s
+}
+
+// WithCache attaches the response cache. scope is "caller" to keep entries
+// private per client, anything else to share them.
+func (s *Server) WithCache(c cache.Cache, ttl time.Duration, scope string) *Server {
+	s.cache = c
+	s.cacheTTL = ttl
+	s.cacheScope = scope
 	return s
 }
 

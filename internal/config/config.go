@@ -97,6 +97,20 @@ type Config struct {
 	// single probe is allowed through.
 	BreakerCooldown time.Duration
 
+	// CacheTTL is how long a completed answer is reused. Zero or less
+	// disables caching. Streaming responses are never cached.
+	CacheTTL time.Duration
+
+	// CacheScope is "shared" to reuse entries across callers, or "caller" to
+	// keep them private. Sharing raises the hit rate at the cost of a subtle
+	// oracle: a caller can tell that somebody asked a given question by
+	// noticing an unusually fast reply.
+	CacheScope string
+
+	// CacheMaxEntries bounds the in-process cache. Ignored when Redis backs
+	// it, since Redis does its own eviction.
+	CacheMaxEntries int
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
@@ -130,6 +144,10 @@ func Load() (*Config, error) {
 		RetryBaseDelay:   envDuration("GATEWAY_RETRY_BASE_DELAY", 200*time.Millisecond),
 		BreakerThreshold: envInt("GATEWAY_BREAKER_THRESHOLD", 5),
 		BreakerCooldown:  envDuration("GATEWAY_BREAKER_COOLDOWN", 30*time.Second),
+
+		CacheTTL:        envDuration("GATEWAY_CACHE_TTL", 0),
+		CacheScope:      env("GATEWAY_CACHE_SCOPE", "shared"),
+		CacheMaxEntries: envInt("GATEWAY_CACHE_MAX_ENTRIES", 1000),
 
 		LogLevel: env("GATEWAY_LOG_LEVEL", "info"),
 	}

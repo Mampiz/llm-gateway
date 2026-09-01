@@ -44,6 +44,29 @@ exactly when something is wrong. Starting with neither keys nor an explicit
 `GATEWAY_AUTH_DISABLED=true` is a startup error, so an open gateway is always
 a deliberate choice.
 
+## Response cache
+
+Off by default; `GATEWAY_CACHE_TTL` turns it on. The key is a digest of
+everything that determines the answer, vendor parameters included, so a hit is
+always an answer to exactly the same question. Hits are marked `X-Cache: HIT`.
+
+Identical **concurrent** requests are collapsed with `singleflight`: a cold
+cache hit by a hundred copies of the same question fetches one answer rather
+than a hundred. That is the case a plain lookup misses, because none of the
+hundred has stored anything yet.
+
+`GATEWAY_CACHE_SCOPE` chooses between `shared`, which raises the hit rate, and
+`caller`, which keeps entries private. Sharing carries a subtle oracle: a
+caller can tell that somebody asked a given question by noticing an unusually
+fast reply.
+
+Streaming responses are not cached. Replaying one faithfully would need the
+frame timing too, and accumulating a copy while forwarding adds a failure mode
+to the hot path for a case that repeats far less often.
+
+A cache failure degrades to a miss: a broken cache makes the gateway slower,
+never broken.
+
 ## Metrics
 
 `/metrics` speaks Prometheus and needs no credential, like the health probe.

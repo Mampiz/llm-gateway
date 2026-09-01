@@ -108,6 +108,7 @@ OPENAI_API_KEY=sk-fake-openai \
 OPENAI_BASE_URL="http://127.0.0.1:${FAKE_PORT}/v1" \
 ANTHROPIC_API_KEY=sk-fake-anthropic \
 ANTHROPIC_BASE_URL="http://127.0.0.1:${FAKE_PORT}/v1" \
+GATEWAY_CACHE_TTL=60s \
   ./bin/gateway > /tmp/smoke-gw.log 2>&1 &
 GW_PID=$!
 
@@ -178,12 +179,21 @@ kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null
 ./bin/fakeupstream -addr ":${FAKE_PORT}" -fail 429 >> /tmp/smoke-fake.log 2>&1 &
 FAKE_PID=$!
 sleep 1
-check    "429 del upstream se propaga"  429 "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
-contains "mensaje del vendor conservado" "told to fail" "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+# A distinct body per check: the cache would otherwise serve the answer from
+# the healthy run above and these would never reach the upstream at all.
+check    "429 del upstream se propaga"  429 "${CT[@]}" -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"error 429 unico"}]}' "${GW}/v1/chat/completions"
+contains "mensaje del vendor conservado" "told to fail" "${CT[@]}" -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"error mensaje unico"}]}' "${GW}/v1/chat/completions"
 
 kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null
-check "upstream caido -> 502"           502 "${CT[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+check "upstream caido -> 502"           502 "${CT[@]}" -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"upstream caido unico"}]}' "${GW}/v1/chat/completions"
 contains "healthz expone los circuitos"  "circuits" "${GW}/healthz"
+
+echo
+echo "== cache de respuestas =="
+CACHE_REQ='{"model":"mock-1","messages":[{"role":"user","content":"pregunta cacheable unica"}]}'
+icontains "primera vez -> MISS"          "x-cache: MISS" -D - -o /dev/null "${CT[@]}" -d "$CACHE_REQ" "${GW}/v1/chat/completions"
+icontains "segunda vez -> HIT"           "x-cache: HIT"  -D - -o /dev/null "${CT[@]}" -d "$CACHE_REQ" "${GW}/v1/chat/completions"
+icontains "otra pregunta -> MISS"        "x-cache: MISS" -D - -o /dev/null "${CT[@]}" -d '{"model":"mock-1","messages":[{"role":"user","content":"otra distinta"}]}' "${GW}/v1/chat/completions"
 
 echo
 echo "== metricas =="
