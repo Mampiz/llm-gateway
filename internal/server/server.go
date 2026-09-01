@@ -59,6 +59,11 @@ type Server struct {
 	// what forces the streaming handler to multiplex.
 	streamIdle      time.Duration
 	streamHeartbeat time.Duration
+
+	// streamMaxDuration caps a whole streamed answer. The idle timeout only
+	// catches silence; an upstream that keeps emitting would otherwise hold a
+	// connection, a goroutine and a paid-for call indefinitely.
+	streamMaxDuration time.Duration
 }
 
 // New builds a Server. The registry, not a single provider, is injected: from
@@ -71,13 +76,14 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 		registry: reg,
 		// Always present, so there is one request path rather than two.
 		// Without configured fallbacks it simply retries the one provider.
-		router:          provider.NewRouter(reg, nil, provider.DefaultRetryPolicy(), provider.BreakerConfig{}),
-		logger:          logger,
-		requestTimeout:  requestTimeout,
-		version:         version,
-		metrics:         metrics.New(prometheus.NewRegistry()),
-		streamIdle:      60 * time.Second,
-		streamHeartbeat: 15 * time.Second,
+		router:            provider.NewRouter(reg, nil, provider.DefaultRetryPolicy(), provider.BreakerConfig{}),
+		logger:            logger,
+		requestTimeout:    requestTimeout,
+		version:           version,
+		metrics:           metrics.New(prometheus.NewRegistry()),
+		streamIdle:        60 * time.Second,
+		streamHeartbeat:   15 * time.Second,
+		streamMaxDuration: 10 * time.Minute,
 	}
 }
 
@@ -85,6 +91,15 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 // leaves the gateway unauthenticated.
 func (s *Server) WithAuth(keys auth.Store) *Server {
 	s.keys = keys
+	return s
+}
+
+// WithStreamMaxDuration caps how long a single streamed answer may run. Zero
+// or less leaves the current value untouched.
+func (s *Server) WithStreamMaxDuration(d time.Duration) *Server {
+	if d > 0 {
+		s.streamMaxDuration = d
+	}
 	return s
 }
 

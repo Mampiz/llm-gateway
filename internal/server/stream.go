@@ -49,7 +49,11 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 	// path: a total timeout would cut a long generation short. What this
 	// wants instead is an idle timeout, which a sequential loop cannot
 	// express.
-	streamCtx, cancel := context.WithCancel(r.Context())
+	// A cap on the whole answer, on top of the per-chunk idle timeout further
+	// down. The idle timer catches an upstream that goes quiet; this catches
+	// one that never stops talking, which would otherwise hold a connection,
+	// a goroutine and a call we are paying for until the provider tires.
+	streamCtx, cancel := context.WithTimeout(r.Context(), s.streamMaxDuration)
 	defer cancel()
 
 	// Only the failure to *start* can fail over. Once frames have reached the
@@ -67,6 +71,15 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		s.writeProviderError(w, r, served, err)
+		return
+	}
+	if stream == nil {
+		// Same contract violation as on the buffered path, and the same
+		// reasoning: a clear 502 beats a panic recovered into an opaque 500.
+		s.logger.Error("provider returned neither a stream nor an error",
+			"provider", served, "request_id", RequestIDFrom(r.Context()))
+		s.metrics.RequestFinished(served, req.Model, "error", true, time.Since(started).Seconds())
+		writeError(w, http.StatusBadGateway, "upstream_error", "provider returned an empty stream")
 		return
 	}
 
@@ -177,6 +190,23 @@ func (s *Server) streamChatCompletions(w http.ResponseWriter, r *http.Request, r
 				s.metrics.RequestFinished(served, req.Model, "cancelled", true, time.Since(started).Seconds())
 				return
 			}
+
+		case <-streamCtx.Done():
+			// Without this case the end of a stream is only noticed at the
+			// next chunk or heartbeat, so a client that walked away keeps
+			// paying for tokens until then.
+			//
+			// The two causes need opposite handling. A cancelled context is
+			// the client leaving: there is nobody left to tell. A deadline is
+			// our own cap firing, and the client is still there waiting for
+			// an explanation.
+			outcome := "cancelled"
+			if errors.Is(streamCtx.Err(), context.DeadlineExceeded) {
+				outcome = "timeout"
+				writeSSEError(w, rc, streamCtx.Err())
+			}
+			s.metrics.RequestFinished(served, req.Model, outcome, true, time.Since(started).Seconds())
+			return
 		}
 	}
 

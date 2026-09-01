@@ -48,6 +48,11 @@ type Config struct {
 	// generation is fine as long as it keeps moving.
 	StreamIdleTimeout time.Duration
 
+	// StreamMaxDuration caps a whole streamed answer. StreamIdleTimeout
+	// catches an upstream that goes quiet; this one catches an upstream that
+	// never stops talking.
+	StreamMaxDuration time.Duration
+
 	// StreamHeartbeat is how often an idle stream emits an SSE comment, so
 	// that proxies and load balancers do not drop a connection that is merely
 	// waiting for the model to think.
@@ -131,6 +136,7 @@ func Load() (*Config, error) {
 
 		StreamIdleTimeout: envDuration("GATEWAY_STREAM_IDLE_TIMEOUT", 60*time.Second),
 		StreamHeartbeat:   envDuration("GATEWAY_STREAM_HEARTBEAT", 15*time.Second),
+		StreamMaxDuration: envDuration("GATEWAY_STREAM_MAX_DURATION", 10*time.Minute),
 
 		APIKeys:      env("GATEWAY_API_KEYS", ""),
 		AuthDisabled: envBool("GATEWAY_AUTH_DISABLED", false),

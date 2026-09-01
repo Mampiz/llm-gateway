@@ -132,6 +132,7 @@ func run() error {
 					Cooldown:  cfg.BreakerCooldown,
 				}).
 			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
+			WithStreamMaxDuration(cfg.StreamMaxDuration).
 			Handler(),
 
 		ReadHeaderTimeout: 10 * time.Second,

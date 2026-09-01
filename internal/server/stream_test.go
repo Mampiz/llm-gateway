@@ -526,3 +526,83 @@ func TestStreaming_SendsHeartbeatsWhileWaiting(t *testing.T) {
 		t.Errorf("assembled text = %q, want %q: the heartbeats corrupted the content", got, "slow answer")
 	}
 }
+
+// The idle timeout catches silence, not an upstream that keeps talking. A
+// stream that never ends would hold a connection, a goroutine and an upstream
+// call for as long as the provider feels like it.
+func TestStreaming_MaxDurationEndsAnEndlessStream(t *testing.T) {
+	const maxDuration = 300 * time.Millisecond
+
+	// Chunks arrive steadily and never stop, so the idle timer never fires.
+	endless := &stubProvider{
+		stream: func(ctx context.Context, _ provider.ChatRequest) (provider.Stream, error) {
+			return &endlessStream{ctx: ctx, gap: 20 * time.Millisecond}, nil
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(endless)
+	if err := reg.SetDefault("stub"); err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(reg, logger, time.Second, "test").
+		WithStreamTimings(5*time.Second, time.Hour).
+		WithStreamMaxDuration(maxDuration).
+		Handler()
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	start := time.Now()
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(streamBody)) //nolint:noctx // the test owns the lifetime
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, finished := readUntilQuiet(t, resp.Body, 5*time.Second)
+	if !finished {
+		t.Fatal("the handler never ended the response: an endless upstream held it open")
+	}
+
+	elapsed := time.Since(start)
+	if elapsed > 10*maxDuration {
+		t.Errorf("the stream ran for %v, want it cut at roughly %v", elapsed, maxDuration)
+	}
+	if !strings.Contains(body, "error") {
+		t.Errorf("the cut was never reported to the client:\n%s", body)
+	}
+	if frames := sseFrames(t, body); len(frames) > 0 && frames[len(frames)-1] == "[DONE]" {
+		t.Error("a truncated stream ended with [DONE]")
+	}
+}
+
+// endlessStream emits chunks forever at a steady pace.
+type endlessStream struct {
+	ctx     context.Context
+	gap     time.Duration
+	current provider.Chunk
+	err     error
+	closed  bool
+}
+
+var _ provider.Stream = (*endlessStream)(nil)
+
+func (e *endlessStream) Next() bool {
+	if e.err != nil || e.closed {
+		return false
+	}
+	select {
+	case <-time.After(e.gap):
+	case <-e.ctx.Done():
+		e.err = e.ctx.Err()
+		return false
+	}
+	e.current = provider.Chunk{ID: "x", Model: "m", Content: "tick "}
+	return true
+}
+
+func (e *endlessStream) Current() provider.Chunk { return e.current }
+func (e *endlessStream) Err() error              { return e.err }
+func (e *endlessStream) Close() error            { e.closed = true; return nil }

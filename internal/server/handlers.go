@@ -87,6 +87,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The Provider contract says exactly one of the two results is non-nil.
+	// A misbehaving implementation returning neither would panic below, and
+	// the recoverer would turn a diagnosable bug into an opaque 500.
+	if resp == nil {
+		s.metrics.RequestFinished(served, req.Model, "error", false, time.Since(started).Seconds())
+		s.logger.Error("provider returned neither a response nor an error",
+			"provider", served, "request_id", RequestIDFrom(r.Context()))
+		writeError(w, http.StatusBadGateway, "upstream_error", "provider returned an empty response")
+		return
+	}
+
 	if cached {
 		w.Header().Set(cacheHeader, cacheHit)
 		s.metrics.RequestFinished(served, req.Model, "cache_hit", false, time.Since(started).Seconds())

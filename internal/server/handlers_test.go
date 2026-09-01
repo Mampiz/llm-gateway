@@ -419,3 +419,25 @@ func TestRouting(t *testing.T) {
 		})
 	}
 }
+
+// The Provider contract says exactly one of (response, error) is non-nil. A
+// broken implementation must produce a diagnosable 502, not a panic that the
+// recoverer flattens into an opaque 500.
+func TestChatCompletions_HandlesAProviderThatReturnsNothing(t *testing.T) {
+	p := &stubProvider{chat: func(context.Context, provider.ChatRequest) (*provider.ChatResponse, error) {
+		return nil, nil //nolint:nilnil // the contract violation is the point
+	}}
+
+	rec := do(newTestHandler(p), http.MethodPost, "/v1/chat/completions", validBody)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502 (body: %s)", rec.Code, rec.Body)
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("body is not the usual envelope: %v", err)
+	}
+	if env.Error.Message == "" {
+		t.Error("the 502 carries no message")
+	}
+}
