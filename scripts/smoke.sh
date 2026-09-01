@@ -8,6 +8,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+GW_KEY=${GW_KEY:-gw_smoketestkey}
 FAKE_PORT=${FAKE_PORT:-9000}
 GW_PORT=${GW_PORT:-8080}
 GW="http://127.0.0.1:${GW_PORT}"
@@ -85,6 +86,7 @@ FAKE_PID=$!
 echo "== arrancando gateway en :${GW_PORT} =="
 GATEWAY_ADDR=":${GW_PORT}" \
 GATEWAY_LOG_LEVEL=warn \
+GATEWAY_API_KEYS="smoke:${GW_KEY}" \
 OPENAI_API_KEY=sk-fake-openai \
 OPENAI_BASE_URL="http://127.0.0.1:${FAKE_PORT}/v1" \
 ANTHROPIC_API_KEY=sk-fake-anthropic \
@@ -100,7 +102,7 @@ if ! curl -sf "${GW}/healthz" >/dev/null 2>&1; then
   red "el gateway no arrancó"; echo; cat /tmp/smoke-gw.log; exit 1
 fi
 
-CT=(-H 'Content-Type: application/json')
+CT=(-H 'Content-Type: application/json' -H "Authorization: Bearer ${GW_KEY}")
 OPENAI_REQ='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hola"}]}'
 CLAUDE_REQ='{"model":"claude-sonnet-5","messages":[{"role":"system","content":"se breve"},{"role":"user","content":"hola"},{"role":"system","content":"en espanol"}]}'
 MOCK_REQ='{"model":"mock-1","messages":[{"role":"user","content":"hola"}]}'
@@ -123,6 +125,13 @@ echo "== traduccion Anthropic =="
 absent   "bloques thinking filtrados"   "MUST NOT REACH" "${CT[@]}" -d "$CLAUDE_REQ" "${GW}/v1/chat/completions"
 contains "formato OpenAI de vuelta"     '"object":"chat.completion"' "${CT[@]}" -d "$CLAUDE_REQ" "${GW}/v1/chat/completions"
 contains "usage traducido y sumado"     '"total_tokens":16' "${CT[@]}" -d "$CLAUDE_REQ" "${GW}/v1/chat/completions"
+
+echo
+echo "== autenticacion =="
+NOAUTH=(-H 'Content-Type: application/json')
+check "sin clave -> 401"                401 "${NOAUTH[@]}" -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+check "clave invalida -> 401"           401 "${NOAUTH[@]}" -H 'Authorization: Bearer gw_wrong' -d "$OPENAI_REQ" "${GW}/v1/chat/completions"
+check "healthz sigue abierto"           200 "${GW}/healthz"
 
 echo
 echo "== validacion =="

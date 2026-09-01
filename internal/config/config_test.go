@@ -14,9 +14,15 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"GATEWAY_ADDR", "GATEWAY_PROVIDER", "OPENAI_API_KEY",
 		"OPENAI_BASE_URL", "GATEWAY_REQUEST_TIMEOUT", "GATEWAY_LOG_LEVEL",
+		"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_MAX_TOKENS",
+		"GATEWAY_STREAM_IDLE_TIMEOUT", "GATEWAY_STREAM_HEARTBEAT",
+		"GATEWAY_API_KEYS", "GATEWAY_AUTH_DISABLED",
 	} {
 		t.Setenv(k, "")
 	}
+	// Every case below is about something other than authentication, and an
+	// empty key list is now a startup error, so give them one valid key.
+	t.Setenv("GATEWAY_API_KEYS", "test:gw_testkey")
 }
 
 func TestLoad_Defaults(t *testing.T) {
@@ -40,6 +46,65 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want info", cfg.LogLevel)
+	}
+	// Authentication must be on unless it is switched off on purpose.
+	if cfg.AuthDisabled {
+		t.Error("AuthDisabled = true by default, want authentication enforced")
+	}
+}
+
+func TestLoad_RequiresKeysUnlessAuthIsDisabled(t *testing.T) {
+	t.Run("no keys is a startup error", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("GATEWAY_API_KEYS", "")
+
+		cfg, err := Load()
+		if err == nil {
+			t.Fatalf("Load() = %+v, nil; want an error rather than an open gateway", cfg)
+		}
+		if !strings.Contains(err.Error(), "GATEWAY_AUTH_DISABLED") {
+			t.Errorf("error = %q, want it to name the explicit opt-out", err)
+		}
+	})
+
+	t.Run("opting out explicitly is allowed", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("GATEWAY_API_KEYS", "")
+		t.Setenv("GATEWAY_AUTH_DISABLED", "true")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed with an explicit opt-out: %v", err)
+		}
+		if !cfg.AuthDisabled {
+			t.Error("AuthDisabled = false, want true")
+		}
+	})
+}
+
+func TestEnvBool(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"true", true}, {"TRUE", true}, {"1", true}, {"yes", true}, {"on", true},
+		{"false", false}, {"0", false}, {"no", false}, {"off", false},
+		{"", false}, {"maybe", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("GATEWAY_AUTH_DISABLED", tt.value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+			if cfg.AuthDisabled != tt.want {
+				t.Errorf("AuthDisabled = %v, want %v", cfg.AuthDisabled, tt.want)
+			}
+		})
 	}
 }
 

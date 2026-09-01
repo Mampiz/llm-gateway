@@ -17,6 +17,33 @@ A single OpenAI-compatible endpoint in front of several LLM providers: routing, 
 
 Phase 3 — streaming. Work in progress.
 
+## Authentication
+
+Clients authenticate with keys the gateway issues, never with a provider's
+credentials. A leaked client key costs one revocation; a leaked OpenAI key
+costs a rotation and whatever was spent in between.
+
+```bash
+go run ./cmd/gateway -genkey        # gw_a4573d31...
+```
+
+```bash
+GATEWAY_API_KEYS="alice:gw_a4573d31...,ci:gw_91ab..." make run
+```
+
+```bash
+curl localhost:8080/v1/chat/completions \
+  -H 'Authorization: Bearer gw_a4573d31...' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Secrets are stored as SHA-256 digests, so the running process holds nothing
+usable. `/healthz` stays open: a probe that needs a credential stops working
+exactly when something is wrong. Starting with neither keys nor an explicit
+`GATEWAY_AUTH_DISABLED=true` is a startup error, so an open gateway is always
+a deliberate choice.
+
 ## Routing
 
 One OpenAI-shaped endpoint, several vendors behind it. The provider is chosen

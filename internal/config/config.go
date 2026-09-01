@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,15 @@ type Config struct {
 	// waiting for the model to think.
 	StreamHeartbeat time.Duration
 
+	// APIKeys is the raw specification of the gateway's own client keys, as
+	// `name:secret` pairs separated by commas.
+	APIKeys string
+
+	// AuthDisabled turns off client authentication. It exists so local
+	// development against the fake upstream needs no setup, and it has to be
+	// asked for explicitly: an unauthenticated gateway is never the default.
+	AuthDisabled bool
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
@@ -73,6 +83,9 @@ func Load() (*Config, error) {
 		StreamIdleTimeout: envDuration("GATEWAY_STREAM_IDLE_TIMEOUT", 60*time.Second),
 		StreamHeartbeat:   envDuration("GATEWAY_STREAM_HEARTBEAT", 15*time.Second),
 
+		APIKeys:      env("GATEWAY_API_KEYS", ""),
+		AuthDisabled: envBool("GATEWAY_AUTH_DISABLED", false),
+
 		LogLevel: env("GATEWAY_LOG_LEVEL", "info"),
 	}
 
@@ -90,7 +103,22 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("unknown GATEWAY_PROVIDER %q (want \"openai\", \"anthropic\" or \"mock\")", cfg.Provider)
 	}
 
+	if !cfg.AuthDisabled && strings.TrimSpace(cfg.APIKeys) == "" {
+		return nil, fmt.Errorf("GATEWAY_API_KEYS is empty: set it, or set GATEWAY_AUTH_DISABLED=true to run without authentication")
+	}
+
 	return cfg, nil
+}
+
+func envBool(key string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func env(key, fallback string) string {

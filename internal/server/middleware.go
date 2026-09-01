@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,17 @@ import (
 // This is the standard way to store values in a context safely.
 type ctxKey string
 
-const requestIDKey ctxKey = "request_id"
+const (
+	requestIDKey ctxKey = "request_id"
+	callerKey    ctxKey = "caller"
+)
+
+// CallerFrom returns the authenticated caller's name, or "" when the request
+// was not authenticated (which only happens with auth explicitly disabled).
+func CallerFrom(ctx context.Context) string {
+	name, _ := ctx.Value(callerKey).(string)
+	return name
+}
 
 // RequestIDFrom returns the request id attached by the requestID middleware,
 // or "" when there is none.
@@ -78,6 +89,7 @@ func logging(logger *slog.Logger) middleware {
 				"bytes", rec.bytes,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", RequestIDFrom(r.Context()),
+				"caller", CallerFrom(r.Context()),
 			)
 		})
 	}
@@ -103,4 +115,53 @@ func recoverer(logger *slog.Logger) middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// requireAuth rejects requests without a valid gateway API key.
+//
+// It guards the API surface only: /healthz and /metrics stay open, because a
+// probe that needs a credential is a probe that stops working exactly when
+// something is wrong.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.keys == nil { // authentication explicitly disabled
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		secret, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			// The header tells a well-behaved client how to authenticate
+			// rather than leaving it to guess.
+			w.Header().Set("WWW-Authenticate", `Bearer realm="llm-gateway"`)
+			writeError(w, http.StatusUnauthorized, "invalid_request_error",
+				"missing or malformed Authorization header, want: Bearer <key>")
+			return
+		}
+
+		key, found := s.keys.Lookup(secret)
+		if !found {
+			// Deliberately identical wording for an unknown key and a
+			// malformed one at the log level, and no echo of what was sent.
+			s.logger.Warn("rejected an unknown API key",
+				"request_id", RequestIDFrom(r.Context()),
+				"remote", r.RemoteAddr,
+			)
+			writeError(w, http.StatusUnauthorized, "invalid_request_error", "invalid API key")
+			return
+		}
+
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey, key.Name)))
+	})
+}
+
+// bearerToken extracts the credential from an Authorization header. The scheme
+// is matched case-insensitively, as RFC 7235 requires.
+func bearerToken(header string) (string, bool) {
+	scheme, token, found := strings.Cut(header, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	token = strings.TrimSpace(token)
+	return token, token != ""
 }

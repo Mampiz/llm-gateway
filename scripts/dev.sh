@@ -7,6 +7,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+GW_KEY=${GW_KEY:-gw_devkey}
 FAKE_PORT=${FAKE_PORT:-9000}
 GW_PORT=${GW_PORT:-8080}
 
@@ -27,6 +28,7 @@ FAKE_PID=$!
 
 GATEWAY_ADDR=":${GW_PORT}" \
 GATEWAY_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-info} \
+GATEWAY_API_KEYS="dev:${GW_KEY}" \
 OPENAI_API_KEY=sk-fake-openai \
 OPENAI_BASE_URL="http://127.0.0.1:${FAKE_PORT}/v1" \
 ANTHROPIC_API_KEY=sk-fake-anthropic \
@@ -39,15 +41,18 @@ cat <<BANNER
 
   gateway   http://127.0.0.1:${GW_PORT}
   upstream  http://127.0.0.1:${FAKE_PORT}
+  api key   ${GW_KEY}
 
   curl -s localhost:${GW_PORT}/healthz | jq
 
   curl -s localhost:${GW_PORT}/v1/chat/completions \\
     -H 'Content-Type: application/json' \\
+    -H 'Authorization: Bearer ${GW_KEY}' \\
     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hola"}]}' | jq
 
   curl -s localhost:${GW_PORT}/v1/chat/completions \\
     -H 'Content-Type: application/json' \\
+    -H 'Authorization: Bearer ${GW_KEY}' \\
     -d '{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hola"}]}' | jq
 
   Ctrl-C para parar.

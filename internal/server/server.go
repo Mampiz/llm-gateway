@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Mampiz/llm-gateway/internal/auth"
 	"github.com/Mampiz/llm-gateway/internal/provider"
 )
 
@@ -17,6 +18,10 @@ type Server struct {
 	logger         *slog.Logger
 	requestTimeout time.Duration
 	version        string
+
+	// keys authenticates clients. A nil store means authentication is
+	// disabled, which config only allows when asked for explicitly.
+	keys auth.Store
 
 	// streamIdle and streamHeartbeat govern a streaming response. Neither can
 	// be honoured by a loop that simply blocks on the next chunk, which is
@@ -41,6 +46,13 @@ func New(reg *provider.Registry, logger *slog.Logger, requestTimeout time.Durati
 	}
 }
 
+// WithAuth attaches the key store that guards the API surface. Passing nil
+// leaves the gateway unauthenticated.
+func (s *Server) WithAuth(keys auth.Store) *Server {
+	s.keys = keys
+	return s
+}
+
 // WithStreamTimings overrides the streaming durations. Zero or negative values
 // leave the current one untouched.
 func (s *Server) WithStreamTimings(idle, heartbeat time.Duration) *Server {
@@ -62,7 +74,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	// Only the API surface is guarded: a health probe that needs a credential
+	// stops working exactly when it is most needed.
+	mux.Handle("POST /v1/chat/completions", s.requireAuth(http.HandlerFunc(s.handleChatCompletions)))
 
 	return chain(mux,
 		recoverer(s.logger), // outermost: catches panics from everything below

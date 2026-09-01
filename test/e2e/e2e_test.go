@@ -28,6 +28,9 @@ import (
 
 var binary string
 
+// testAPIKey is the single gateway key every e2e case authenticates with.
+const testAPIKey = "gw_e2etestkey"
+
 // TestMain compiles the gateway once for every test in the package.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "gateway-e2e")
@@ -71,6 +74,7 @@ func gateway(t *testing.T, env map[string]string) string {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("GATEWAY_ADDR=:%d", port),
 		"GATEWAY_LOG_LEVEL=error",
+		"GATEWAY_API_KEYS=e2e:"+testAPIKey,
 	)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -126,6 +130,7 @@ func post(t *testing.T, base, body string) (int, map[string]any) {
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -354,6 +359,7 @@ func TestStreamsThroughTheBinary(t *testing.T) {
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -444,6 +450,7 @@ func TestStreamsAnthropic(t *testing.T) {
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -532,13 +539,54 @@ func fakeStreamingAnthropic(t *testing.T) string {
 	return srv.URL
 }
 
+// TestRejectsUnauthenticatedRequests proves the guard is wired in the real
+// binary, not just in the handler tests.
+func TestRejectsUnauthenticatedRequests(t *testing.T) {
+	base := gateway(t, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	body := `{"model":"mock-1","messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// deliberately no Authorization header
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
+		t.Errorf("WWW-Authenticate = %q, want it to name the scheme", got)
+	}
+
+	// The health probe must stay reachable without a credential.
+	health, err := http.Get(base + "/healthz") //nolint:noctx // trivial probe
+	if err != nil {
+		t.Fatalf("healthz failed: %v", err)
+	}
+	defer health.Body.Close()
+	if health.StatusCode != http.StatusOK {
+		t.Errorf("healthz status = %d, want 200 without a key", health.StatusCode)
+	}
+}
+
 // TestStartupFailsOnBadConfig proves the binary refuses to run half-configured
 // instead of surfacing the problem later as a confusing runtime error.
 func TestStartupFailsOnBadConfig(t *testing.T) {
 	cmd := exec.Command(binary)
 	cmd.Env = append(os.Environ(),
 		"GATEWAY_ADDR=:0",
-		"GATEWAY_PROVIDER=openai", // named as default but no API key configured
+		"GATEWAY_API_KEYS=e2e:"+testAPIKey, // valid, so the failure is unambiguous
+		"GATEWAY_PROVIDER=openai",          // named as default but no API key configured
 		"OPENAI_API_KEY=",
 	)
 	out, err := cmd.CombinedOutput()

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mampiz/llm-gateway/internal/auth"
 	"github.com/Mampiz/llm-gateway/internal/config"
 	"github.com/Mampiz/llm-gateway/internal/provider"
 	"github.com/Mampiz/llm-gateway/internal/provider/anthropic"
@@ -25,6 +26,17 @@ import (
 var version = "dev"
 
 func main() {
+	// A tiny escape hatch so issuing a key needs no other tooling installed.
+	if len(os.Args) > 1 && os.Args[1] == "-genkey" {
+		key, err := auth.Generate()
+		if err != nil {
+			slog.Error("fatal", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(key)
+		return
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)
@@ -46,9 +58,21 @@ func run() error {
 		return err
 	}
 
+	var keys auth.Store
+	if cfg.AuthDisabled {
+		logger.Warn("client authentication is DISABLED: anyone who can reach this port can spend the budget")
+	} else {
+		keys, err = auth.NewStaticStore(cfg.APIKeys)
+		if err != nil {
+			return fmt.Errorf("loading API keys: %w", err)
+		}
+		logger.Info("client authentication enabled", "keys", keys.Len())
+	}
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: server.New(reg, logger, cfg.RequestTimeout, version).
+			WithAuth(keys).
 			WithStreamTimings(cfg.StreamIdleTimeout, cfg.StreamHeartbeat).
 			Handler(),
 

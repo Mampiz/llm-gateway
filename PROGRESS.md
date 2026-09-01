@@ -42,6 +42,31 @@ mirroring the OpenAI one. Phase 3 is now complete: both vendors stream.
 
 **Verifier** — passing.
 
+### F2 · Gateway API keys and authentication — closed
+
+New `internal/auth` package, a `requireAuth` middleware, and the caller's name
+carried in the request context for the phases that follow.
+
+**Decisions**
+
+- **Secrets are stored as SHA-256 digests only.** The process never holds a
+  usable credential, so a memory dump or a stray state log leaks nothing.
+  Comparison goes through `subtle.ConstantTimeCompare`.
+- **Refusing to start beats defaulting to open.** With neither
+  `GATEWAY_API_KEYS` nor `GATEWAY_AUTH_DISABLED=true`, the gateway exits with a
+  message naming both options. An unauthenticated gateway is reachable, but
+  only on purpose.
+- **`/healthz` is not guarded.** A probe that needs a credential stops working
+  exactly when something is wrong.
+- **Duplicate secrets are a configuration error.** Two callers sharing one
+  credential would make rate limit buckets and audit trails meaningless.
+- **`-genkey` lives in the binary.** Issuing a key needs no openssl, no
+  scripts, nothing else installed.
+- **The 401 never echoes what was presented**, and an unknown key logs
+  identically to a malformed one.
+
+**Verifier** — passing. Smoke grew to 29 checks.
+
 ## Discarded ideas
 
 _Out-of-scope thoughts land here instead of in the code._
