@@ -9,6 +9,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/Mampiz/llm-gateway)](https://goreportcard.com/report/github.com/Mampiz/llm-gateway)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Mampiz/llm-gateway.svg)](https://pkg.go.dev/github.com/Mampiz/llm-gateway)
 [![Go](https://img.shields.io/github/go-mod/go-version/Mampiz/llm-gateway)](go.mod)
+[![Test Chart](https://github.com/Mampiz/llm-gateway/actions/workflows/chart.yml/badge.svg)](https://github.com/Mampiz/llm-gateway/actions/workflows/chart.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 One OpenAI-compatible endpoint in front of several LLM providers, written to
@@ -337,11 +338,26 @@ The dependency arrow only ever points inwards: `internal/provider` imports no
 vendor package, and Go turns that rule into a compile error rather than a
 convention, since the reverse would be an import cycle.
 
-## Where the reasoning lives
+## Deploying
 
-[PROGRESS.md](PROGRESS.md) records every design decision and why it was made,
-including the ones that were rejected. [PLAN.md](PLAN.md) is the phase plan
-with the verifier for each one.
+A Helm chart with its own Redis, alerting rules and a Grafana dashboard live in
+[`deploy/`](deploy/). CI lints the chart and validates the rendered manifests
+against the Kubernetes API on every push.
+
+```bash
+helm install gw ./deploy/helm/llm-gateway --set secrets.gatewayApiKeys="me:gw_..."
+```
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it is put together, and why |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | what to look at when something is wrong |
+| [deploy/README.md](deploy/README.md) | running it on Kubernetes |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | the loop, the house style, adding a provider |
+| [PROGRESS.md](PROGRESS.md) | every design decision and its reasoning, including the rejected ones |
+| [CHANGELOG.md](CHANGELOG.md) | what changed and when |
 
 ## License
 

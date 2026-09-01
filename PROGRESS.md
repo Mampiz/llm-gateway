@@ -211,6 +211,94 @@ serialisation round trip, expiry, corrupt entries reading as a miss, and an
 entry stored by one instance being readable by another. Coverage there went
 from 53.8% to 84.6%.
 
+### F8 · Bug hunt — closed
+
+Eight defects found by reading every package and reproducing each one with a
+failing test before fixing it. Every fix carries the test that proves it.
+
+1. **A cancelled probe stranded a circuit forever.** Half-open hands out one
+   probe slot, and three paths in the fallback loop returned without reporting
+   an outcome. A caller that took the slot and gave up kept it, so the circuit
+   refused everything from then on and a recovered provider never came back.
+   Fixed with `Breaker.Release` and a deferred call that also covers a panic.
+2. **The in-process rate limiter grew without bound.** With authentication
+   disabled the bucket key is a client address, so the map grew for the life of
+   the process: a memory leak with a rate limit attached. Now bounded, dropping
+   fully refilled buckets first, since those refund nothing.
+3. **The sweep was O(n) per request once over the bound**, turning a flood of
+   distinct callers into quadratic work. Now spaced out, so the cost amortises.
+4. **`singleflight` failed every follower when the leader disconnected.** The
+   shared call ran on whichever context arrived first. The deadline is kept,
+   the cancellation is not.
+5. **No cap on a whole streamed answer.** The idle timeout catches silence, not
+   an upstream that never stops talking, which could hold a connection, a
+   goroutine and a paid-for call indefinitely.
+6. **The streaming select did not watch its context**, so a client that walked
+   away was noticed only at the next chunk or heartbeat, paying for tokens in
+   between.
+7. **A panic partway through a response spliced an error object into it.** The
+   status was already on the wire, so the recovery corrupted whatever was being
+   streamed and logged a superfluous WriteHeader. It now aborts the connection,
+   which is the honest signal, and still answers cleanly when nothing was sent.
+8. **SIGTERM during any stream exited with code 1.** Streams outlive any
+   sensible grace period, so `Shutdown` always timed out and an orchestrator
+   read a normal rolling deploy as a crash. Streams are now told to wind up
+   first, and an expired grace period logs rather than fails.
+
+Two more, outside the gateway itself:
+
+- **A provider returning neither a result nor an error panicked the handler.**
+  Now a diagnosable 502 rather than an opaque recovered 500.
+- **The smoke script reported found matches as failures.** `grep -q` exits on
+  the first match and closes the pipe; `printf` died of SIGPIPE and
+  `set -o pipefail` turned that into the pipeline's status. Only bodies large
+  enough that `printf` was still writing were affected, which is why only the
+  29 KB metrics scrape ever flaked. Twenty consecutive green runs since.
+
+Also fixed while reading: unusable zero durations accepted silently, response
+bodies closed without draining (so connections could not be reused), and a
+plain mutex on the metrics hot path.
+
+**Verifier** — passing.
+
+### F9 · Documentation — closed
+
+- **`docs/ARCHITECTURE.md`** — the shape of a request, the dependency rule, the
+  two dialects side by side, how streaming is multiplexed, and where state
+  lives. Four Mermaid diagrams, each showing a mechanism rather than decorating
+  a heading.
+- **`docs/OPERATIONS.md`** — organised by symptom, not by feature. What to look
+  at when answers come from the wrong provider, when latency jumps, when clients
+  see 429s the vendor did not send, when streams die, when a proxy cuts them.
+  Each entry names the metric and the knob.
+- **`CONTRIBUTING.md`** — the loop, what each test layer is for, the house
+  style, and how to add a provider without editing an existing file.
+- **`CHANGELOG.md`** — Keep a Changelog format, with the bug hunt written up
+  honestly rather than hidden under "various fixes".
+- Every package already carried a doc comment; `go doc ./internal/...` is clean.
+
+### F10 · Employability pass — closed
+
+What makes the repository read as production work rather than an exercise:
+
+- **A Helm chart** (`deploy/helm/llm-gateway`) with its own Redis, an HPA, a
+  PodDisruptionBudget, a ServiceMonitor, and the pod hardening the scratch image
+  allows. It renders the non-obvious things right: a grace period longer than
+  the drain, a startup probe distinct from the liveness one, a config checksum
+  so a ConfigMap change actually rolls the pods, and Redis with `allkeys-lru`
+  and no persistence because both its users are caches.
+- **A "Test Chart" workflow** that lints, renders and validates the manifests
+  against the Kubernetes API, plus the non-default value paths. Rendering alone
+  is not enough: a chart can render happily into manifests the API rejects.
+- **Alerting rules** written against symptoms a user would notice rather than
+  causes, and a **Grafana dashboard** whose panel forms follow the question:
+  a stat for the headline, a state timeline for circuit state, timeseries for
+  everything that changes over time, and no dual axes anywhere.
+- **`deploy/README.md`** explaining the settings that are easy to get wrong.
+- **A CHANGELOG and a v1.0.0 tag.**
+
+**Verifier** — `make chart` and `make ci` passing.
+
 ## Discarded ideas
 
 - **Semantic caching.** Listed as a bonus in the original plan. Needs an
