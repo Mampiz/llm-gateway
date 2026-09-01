@@ -16,7 +16,7 @@ cleanup() {
   [ -n "${FAKE_PID:-}" ] && kill "$FAKE_PID" 2>/dev/null
   wait 2>/dev/null
   echo
-  echo "parado."
+  echo "stopped."
 }
 trap cleanup EXIT INT TERM
 

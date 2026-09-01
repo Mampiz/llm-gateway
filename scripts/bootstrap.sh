@@ -50,7 +50,7 @@ step "Driving the real binary"
   cat /tmp/bootstrap-smoke.log
   die "the smoke run failed"
 }
-ok "$(grep -oE '[0-9]+ comprobaciones' /tmp/bootstrap-smoke.log | tail -1) passed against a running gateway"
+ok "$(grep -oE '[0-9]+ checks' /tmp/bootstrap-smoke.log | tail -1) passed against a running gateway"
 
 step "Optional extras"
 if command -v docker >/dev/null 2>&1; then

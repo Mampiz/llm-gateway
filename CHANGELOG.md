@@ -53,6 +53,10 @@ Found by auditing every package, each with the test that reproduces it:
   pipe killed `printf` with SIGPIPE, and `set -o pipefail` promoted that to the
   pipeline's status.
 
+### Changed
+
+- Verification scripts print in English, matching the rest of the repository.
+
 ### Security
 
 - Client keys are never stored or logged in plaintext, and a rejected key is
