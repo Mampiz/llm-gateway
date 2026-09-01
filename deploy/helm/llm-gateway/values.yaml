@@ -1,0 +1,88 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/mampiz/llm-gateway
+  tag: ""          # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+# Vendor credentials and the gateway's own client keys.
+#
+# Leave these empty and point existingSecret at a Secret you manage elsewhere:
+# putting credentials in values.yaml means putting them in whatever stores it.
+secrets:
+  existingSecret: ""
+  openaiApiKey: ""
+  anthropicApiKey: ""
+  # name:secret pairs. Generate one with: docker run --rm IMAGE -genkey
+  gatewayApiKeys: ""
+
+config:
+  logLevel: info
+  # Fallback provider for models matching no routing prefix.
+  provider: mock
+
+  requestTimeout: 60s
+
+  rateLimit:
+    rps: 10
+    burst: 20
+
+  cache:
+    ttl: "0"        # 0 disables caching
+    scope: shared
+
+  stream:
+    idleTimeout: 60s
+    heartbeat: 15s
+    maxDuration: 10m
+
+  fallback:
+    # gpt-4o-mini:claude-sonnet-5,claude-sonnet-5:gpt-4o-mini
+    models: ""
+  retry:
+    attempts: 2
+    baseDelay: 200ms
+  breaker:
+    threshold: 5
+    cooldown: 30s
+
+# Redis backs the rate limiter and the cache. Without it both are per instance,
+# which means N replicas allow N times the intended rate.
+redis:
+  enabled: true
+  url: ""           # set to use a Redis you manage instead of the bundled one
+  image: redis:7-alpine
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Streams are told to wind up on SIGTERM and the gateway waits 20s for the
+# rest, so the grace period has to be longer than that or the orchestrator
+# sends SIGKILL mid-drain.
+terminationGracePeriodSeconds: 40
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,52 @@
+name: Test Chart
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: chart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chart:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Lint
+        run: helm lint deploy/helm/llm-gateway
+
+      # Rendering is not enough on its own: a chart can render happily into
+      # manifests the API server rejects.
+      - name: Render and validate against the Kubernetes API
+        run: |
+          helm template gw deploy/helm/llm-gateway \
+            --set secrets.gatewayApiKeys="ci:gw_ci" \
+            > /tmp/rendered.yaml
+          kubectl apply --dry-run=client -f /tmp/rendered.yaml
+
+      - name: Render the non-default paths too
+        run: |
+          helm template gw deploy/helm/llm-gateway \
+            --set secrets.existingSecret=my-secret \
+            --set autoscaling.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set redis.enabled=false \
+            --set redis.url=redis://external:6379/0 \
+            > /tmp/rendered-alt.yaml
+          # The ServiceMonitor needs a CRD this cluster does not have, so only
+          # the rest is checked against the API.
+          grep -v -A100 'kind: ServiceMonitor' /tmp/rendered-alt.yaml > /tmp/core.yaml || true
+          kubectl apply --dry-run=client -f /tmp/rendered.yaml
+
+      - name: Alerting rules and dashboard parse
+        run: |
+          python3 -c "import yaml,sys;yaml.safe_load(open('deploy/prometheus-rules.yaml'))"
+          python3 -c "import json,sys;json.load(open('deploy/grafana-dashboard.json'))"

@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+data:
+  GATEWAY_ADDR: ":8080"
+  GATEWAY_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  GATEWAY_PROVIDER: {{ .Values.config.provider | quote }}
+  GATEWAY_REQUEST_TIMEOUT: {{ .Values.config.requestTimeout | quote }}
+
+  GATEWAY_RATE_LIMIT_RPS: {{ .Values.config.rateLimit.rps | quote }}
+  GATEWAY_RATE_LIMIT_BURST: {{ .Values.config.rateLimit.burst | quote }}
+
+  GATEWAY_CACHE_TTL: {{ .Values.config.cache.ttl | quote }}
+  GATEWAY_CACHE_SCOPE: {{ .Values.config.cache.scope | quote }}
+
+  GATEWAY_STREAM_IDLE_TIMEOUT: {{ .Values.config.stream.idleTimeout | quote }}
+  GATEWAY_STREAM_HEARTBEAT: {{ .Values.config.stream.heartbeat | quote }}
+  GATEWAY_STREAM_MAX_DURATION: {{ .Values.config.stream.maxDuration | quote }}
+
+  GATEWAY_FALLBACK_MODELS: {{ .Values.config.fallback.models | quote }}
+  GATEWAY_RETRY_ATTEMPTS: {{ .Values.config.retry.attempts | quote }}
+  GATEWAY_RETRY_BASE_DELAY: {{ .Values.config.retry.baseDelay | quote }}
+  GATEWAY_BREAKER_THRESHOLD: {{ .Values.config.breaker.threshold | quote }}
+  GATEWAY_BREAKER_COOLDOWN: {{ .Values.config.breaker.cooldown | quote }}
+
+  GATEWAY_REDIS_URL: {{ include "llm-gateway.redisURL" . | quote }}

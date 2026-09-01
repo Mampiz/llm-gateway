@@ -1,0 +1,88 @@
+# Prometheus alerting rules for llm-gateway.
+#
+# Each rule alerts on a symptom a user would notice, not on a cause. Alerting
+# on causes produces pages nobody can act on: a provider being slow only
+# matters if it is making answers slow.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llm-gateway
+  labels:
+    app.kubernetes.io/name: llm-gateway
+spec:
+  groups:
+    - name: llm-gateway
+      rules:
+        - alert: GatewayErrorRateHigh
+          expr: |
+            sum(rate(llmgw_requests_total{outcome=~"upstream_error|error"}[5m]))
+              / sum(rate(llmgw_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: More than 5% of completions are failing
+            description: >-
+              Check llmgw_upstream_errors_total for which provider and status,
+              and /healthz for whether a circuit has opened.
+
+        - alert: GatewayProviderCircuitOpen
+          expr: llmgw_circuit_state > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.provider }} is out of rotation"
+            description: >-
+              Traffic is failing over. The circuit closes on its own once a
+              probe succeeds; nothing needs restarting. Worth paging only if
+              every provider is open at once.
+
+        - alert: GatewayAllProvidersDown
+          expr: min(llmgw_circuit_state) > 0
+          for: 1m
+          labels:
+            severity: page
+          annotations:
+            summary: Every provider is out of rotation
+            description: There is nowhere left to fail over to.
+
+        - alert: GatewaySlowFirstToken
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, provider) (rate(llmgw_stream_first_token_seconds_bucket[5m]))
+            ) > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.provider }} takes over 5s to start answering"
+            description: >-
+              This is the latency a user actually feels. Total duration moving
+              on its own is just a longer answer; this moving is a slow one.
+
+        - alert: GatewayRequestsPilingUp
+          expr: llmgw_requests_in_flight > 200
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Requests are arriving faster than they finish
+            description: >-
+              The process will run out of memory before it runs out of
+              patience. Check upstream latency and whether the rate limit is
+              doing its job.
+
+        - alert: GatewayRateLimitingHeavily
+          expr: |
+            sum(rate(llmgw_rate_limited_total[10m]))
+              / sum(rate(llmgw_requests_total[10m])) > 0.2
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: One in five requests is being refused by the limiter
+            description: >-
+              Either a caller is misbehaving or the limit is too tight. With
+              several replicas, confirm GATEWAY_REDIS_URL is set, since the
+              limit is otherwise applied per instance.

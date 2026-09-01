@@ -1,0 +1,21 @@
+{{ include "llm-gateway.fullname" . }} is deployed.
+
+  kubectl port-forward svc/{{ include "llm-gateway.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s localhost:8080/healthz | jq
+
+{{- if not .Values.secrets.existingSecret }}
+{{- if not .Values.secrets.gatewayApiKeys }}
+
+WARNING: no client API keys are configured, so the gateway will refuse to
+start. Issue one and set secrets.gatewayApiKeys:
+
+  docker run --rm {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }} -genkey
+{{- end }}
+{{- end }}
+
+{{- if and (gt (int .Values.replicaCount) 1) (not (include "llm-gateway.redisURL" .)) }}
+
+WARNING: {{ .Values.replicaCount }} replicas with no Redis. The rate limit is
+applied per instance, so the effective rate is {{ .Values.replicaCount }} times
+the configured one. Set redis.enabled or redis.url.
+{{- end }}
