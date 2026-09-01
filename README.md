@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/streaming.svg" alt="Tokens arriving one by one from a Claude model, in OpenAI format" width="680">
+  <img src="docs/assets/streaming.gif" alt="Tokens arriving one by one from a Claude model, in OpenAI format" width="820">
 </p>
 
 <p align="center">
@@ -87,7 +87,7 @@ git clone https://github.com/Mampiz/llm-gateway.git && cd llm-gateway
 ```
 
 <p align="center">
-  <img src="docs/assets/bootstrap.svg" alt="bootstrap.sh building, testing and verifying a running gateway" width="500">
+  <img src="docs/assets/bootstrap.gif" alt="bootstrap.sh building, testing and verifying a running gateway" width="620">
 </p>
 
 Go and nothing else. No API key, no vendor network access, no database. It
@@ -121,7 +121,7 @@ GATEWAY_FALLBACK_MODELS="gpt-4o-mini:claude-sonnet-5,claude-sonnet-5:gpt-4o-mini
 ```
 
 <p align="center">
-  <img src="docs/assets/fallback.svg" alt="OpenAI is down, the answer comes from Anthropic, the circuit is open" width="560">
+  <img src="docs/assets/fallback.gif" alt="OpenAI is down, the answer comes from Anthropic, the circuit is open" width="760">
 </p>
 
 Falling back changes the model as well as the provider, because the same model
@@ -281,7 +281,7 @@ make ci      # everything the pipeline runs
 ```
 
 <p align="center">
-  <img src="docs/assets/smoke.svg" alt="make smoke running 49 checks against a live gateway" width="540">
+  <img src="docs/assets/smoke.gif" alt="make smoke running 49 checks against a live gateway" width="600">
 </p>
 
 The fake upstream in [`cmd/fakeupstream`](cmd/fakeupstream) speaks both dialects,
