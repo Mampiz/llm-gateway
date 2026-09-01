@@ -172,6 +172,38 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("unknown GATEWAY_PROVIDER %q (want \"openai\", \"anthropic\" or \"mock\")", cfg.Provider)
 	}
 
+	// A duration of zero parses cleanly and then makes the gateway useless: a
+	// request timeout of zero expires every request as it starts. Substituting
+	// a default here would hide the mistake; naming it does not.
+	for _, d := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"GATEWAY_REQUEST_TIMEOUT", cfg.RequestTimeout},
+		{"GATEWAY_STREAM_IDLE_TIMEOUT", cfg.StreamIdleTimeout},
+		{"GATEWAY_STREAM_HEARTBEAT", cfg.StreamHeartbeat},
+		{"GATEWAY_STREAM_MAX_DURATION", cfg.StreamMaxDuration},
+		{"GATEWAY_BREAKER_COOLDOWN", cfg.BreakerCooldown},
+	} {
+		if d.value <= 0 {
+			return nil, fmt.Errorf("%s must be a positive duration, got %v", d.name, d.value)
+		}
+	}
+
+	// A heartbeat that never arrives before the idle timeout is a heartbeat
+	// that cannot do its job, and one that fires after the cap is dead weight.
+	if cfg.StreamHeartbeat >= cfg.StreamIdleTimeout {
+		return nil, fmt.Errorf("GATEWAY_STREAM_HEARTBEAT (%v) must be shorter than GATEWAY_STREAM_IDLE_TIMEOUT (%v)",
+			cfg.StreamHeartbeat, cfg.StreamIdleTimeout)
+	}
+
+	if cfg.CacheTTL < 0 {
+		return nil, fmt.Errorf("GATEWAY_CACHE_TTL must not be negative, got %v", cfg.CacheTTL)
+	}
+	if cfg.RetryBaseDelay < 0 {
+		return nil, fmt.Errorf("GATEWAY_RETRY_BASE_DELAY must not be negative, got %v", cfg.RetryBaseDelay)
+	}
+
 	if !cfg.AuthDisabled && strings.TrimSpace(cfg.APIKeys) == "" {
 		return nil, fmt.Errorf("GATEWAY_API_KEYS is empty: set it, or set GATEWAY_AUTH_DISABLED=true to run without authentication")
 	}

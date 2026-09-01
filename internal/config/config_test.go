@@ -202,3 +202,52 @@ func TestEnvDuration(t *testing.T) {
 		})
 	}
 }
+
+// A duration of zero parses cleanly and then makes the gateway useless: a
+// request timeout of zero expires every request the instant it starts, and a
+// stream cap of zero kills every stream before its first token. Silently
+// substituting a default would hide the operator's mistake; refusing to start
+// names it.
+func TestLoad_RejectsNonPositiveDurations(t *testing.T) {
+	for _, name := range []string{
+		"GATEWAY_REQUEST_TIMEOUT",
+		"GATEWAY_STREAM_IDLE_TIMEOUT",
+		"GATEWAY_STREAM_HEARTBEAT",
+		"GATEWAY_STREAM_MAX_DURATION",
+		"GATEWAY_BREAKER_COOLDOWN",
+	} {
+		for _, value := range []string{"0", "0s", "-5s"} {
+			t.Run(name+"="+value, func(t *testing.T) {
+				clearEnv(t)
+				t.Setenv(name, value)
+
+				cfg, err := Load()
+				if err == nil {
+					t.Fatalf("Load() = %+v, nil; want %s=%s refused", cfg, name, value)
+				}
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("error = %q, want it to name %s", err, name)
+				}
+			})
+		}
+	}
+}
+
+// Zero is how caching and rate limiting are switched off, so it must stay
+// legal for exactly those two.
+func TestLoad_AllowsZeroWhereItMeansOff(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GATEWAY_CACHE_TTL", "0")
+	t.Setenv("GATEWAY_RATE_LIMIT_RPS", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.CacheTTL != 0 {
+		t.Errorf("CacheTTL = %v, want 0", cfg.CacheTTL)
+	}
+	if cfg.RateLimitRPS != 0 {
+		t.Errorf("RateLimitRPS = %v, want 0", cfg.RateLimitRPS)
+	}
+}

@@ -90,6 +90,9 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 	// Do returns an error only when the exchange never completed
 	// (DNS, refused connection, cancelled context). An HTTP 429 or 500 is a
 	// *successful* Do with an unhappy status code, handled below.
+	// bodyclose cannot see through provider.DrainAndClose, which both
+	// drains and closes; every path below goes through it.
+	//nolint:bodyclose // closed via provider.DrainAndClose
 	httpResp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, &provider.Error{
@@ -101,7 +104,7 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 
 	// close on every return path, or the TCP connection never goes
 	// back to the Transport's pool.
-	defer httpResp.Body.Close()
+	defer provider.DrainAndClose(httpResp.Body)
 
 	if httpResp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxErrorBody))

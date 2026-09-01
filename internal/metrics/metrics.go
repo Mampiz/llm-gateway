@@ -41,7 +41,10 @@ type Metrics struct {
 	circuits   *prometheus.GaugeVec
 	inFlight   prometheus.Gauge
 
-	mu     sync.Mutex
+	// A read-write lock, not a plain one: every request consults this set and
+	// almost none of them changes it, so serialising all of them behind one
+	// exclusive lock would make the metrics the contention point.
+	mu     sync.RWMutex
 	models map[string]struct{}
 }
 
@@ -111,9 +114,25 @@ func (m *Metrics) model(name string) string {
 		return "unknown"
 	}
 
+	// Fast path: a name already seen needs only a read lock, which several
+	// requests can hold at once.
+	m.mu.RLock()
+	_, seen := m.models[name]
+	full := len(m.models) >= maxLabelValues
+	m.mu.RUnlock()
+
+	if seen {
+		return name
+	}
+	if full {
+		return "other"
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Re-check: another goroutine may have added it, or filled the set, while
+	// the lock was being upgraded.
 	if _, seen := m.models[name]; seen {
 		return name
 	}

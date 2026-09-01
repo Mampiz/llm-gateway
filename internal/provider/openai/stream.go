@@ -68,6 +68,9 @@ func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (prov
 	httpStreamReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpStreamReq.Header.Set("Accept", "text/event-stream")
 
+	// bodyclose cannot see through provider.DrainAndClose, which both
+	// drains and closes; every path below goes through it.
+	//nolint:bodyclose // closed via provider.DrainAndClose
 	httpStreamResp, err := c.http.Do(httpStreamReq)
 	if err != nil {
 		return nil, &provider.Error{
@@ -90,7 +93,7 @@ func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (prov
 			msg = httpStreamResp.Status
 		}
 
-		_ = httpStreamResp.Body.Close()
+		provider.DrainAndClose(httpStreamResp.Body)
 
 		return nil, &provider.Error{
 			Provider:   c.Name(),

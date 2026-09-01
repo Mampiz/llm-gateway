@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 )
 
 // Message is a single turn in a conversation.
@@ -137,6 +138,27 @@ type Stream interface {
 	// once and must be called even when the loop ran to completion, which is
 	// what makes `defer stream.Close()` the right reflex.
 	Close() error
+}
+
+// maxDrain caps how much of an unread body is consumed before closing it.
+const maxDrain = 64 << 10 // 64 KiB
+
+// DrainAndClose reads whatever is left of a response body and closes it.
+//
+// Closing alone is not enough: an http.Transport can only return a connection
+// to its pool once the body has been read to EOF *and* closed. A body closed
+// with bytes still in flight costs a fresh TCP and TLS handshake on the next
+// call, which for a proxy in the hot path is the difference between reusing a
+// connection and paying a round trip for every request.
+//
+// The read is capped, since a body that is enormous is not worth draining just
+// to save one handshake.
+func DrainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrain))
+	_ = body.Close()
 }
 
 // ErrStreamingNotSupported is returned by providers that cannot stream.

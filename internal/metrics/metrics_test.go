@@ -3,6 +3,7 @@ package metrics
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -195,5 +196,29 @@ func TestPublishedNames(t *testing.T) {
 		if !found[want] {
 			t.Errorf("metric %q is not published", want)
 		}
+	}
+}
+
+// Every request goes through the label bound, on its own goroutine.
+func TestModelLabel_IsSafeUnderConcurrency(t *testing.T) {
+	m, _ := newTestMetrics(t)
+
+	var wg sync.WaitGroup
+	for i := range 200 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.RequestFinished("openai", "model-"+strconv.Itoa(i%50), "ok", false, 0.1)
+			_ = m.model("model-" + strconv.Itoa(i))
+		}()
+	}
+	wg.Wait()
+
+	m.mu.RLock()
+	size := len(m.models)
+	m.mu.RUnlock()
+
+	if size > maxLabelValues {
+		t.Errorf("tracked %d model names, want at most %d", size, maxLabelValues)
 	}
 }

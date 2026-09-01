@@ -97,3 +97,54 @@ func TestError_AsTarget(t *testing.T) {
 		t.Errorf("StatusCode = %d, want 503", pErr.StatusCode)
 	}
 }
+
+// A body closed with bytes still in flight cannot go back into the transport's
+// pool, so the next call pays a fresh TCP and TLS handshake.
+func TestDrainAndClose(t *testing.T) {
+	body := &countingBody{data: strings.NewReader(strings.Repeat("x", 4096))}
+
+	DrainAndClose(body)
+
+	if !body.closed {
+		t.Error("the body was not closed")
+	}
+	if body.read != 4096 {
+		t.Errorf("read %d bytes, want the body drained to EOF (4096)", body.read)
+	}
+}
+
+// Draining is capped: an enormous body is not worth reading just to save one
+// handshake.
+func TestDrainAndClose_IsBounded(t *testing.T) {
+	body := &countingBody{data: strings.NewReader(strings.Repeat("x", maxDrain*4))}
+
+	DrainAndClose(body)
+
+	if !body.closed {
+		t.Error("the body was not closed")
+	}
+	if body.read > maxDrain {
+		t.Errorf("read %d bytes, want at most %d", body.read, maxDrain)
+	}
+}
+
+func TestDrainAndClose_HandlesNil(t *testing.T) {
+	DrainAndClose(nil) // must not panic
+}
+
+type countingBody struct {
+	data   *strings.Reader
+	read   int
+	closed bool
+}
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	n, err := c.data.Read(p)
+	c.read += n
+	return n, err
+}
+
+func (c *countingBody) Close() error {
+	c.closed = true
+	return nil
+}

@@ -93,6 +93,9 @@ func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (prov
 	httpReq.Header.Set("X-Api-Key", c.apiKey)
 	httpReq.Header.Set("Anthropic-Version", APIVersion)
 
+	// bodyclose cannot see through provider.DrainAndClose, which both
+	// drains and closes; every path below goes through it.
+	//nolint:bodyclose // closed via provider.DrainAndClose
 	httpResp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, &provider.Error{Provider: c.Name(), Message: err.Error(), Err: err}
@@ -111,7 +114,7 @@ func (c *Client) ChatStream(ctx context.Context, req provider.ChatRequest) (prov
 		}
 
 		// No stream is handed back, so nobody will ever call Close.
-		_ = httpResp.Body.Close()
+		provider.DrainAndClose(httpResp.Body)
 
 		return nil, &provider.Error{
 			Provider:   c.Name(),

@@ -107,6 +107,9 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 	httpReq.Header.Set("X-Api-Key", c.apiKey)
 	httpReq.Header.Set("Anthropic-Version", APIVersion)
 
+	// bodyclose cannot see through provider.DrainAndClose, which both
+	// drains and closes; every path below goes through it.
+	//nolint:bodyclose // closed via provider.DrainAndClose
 	httpResp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, &provider.Error{
@@ -115,7 +118,7 @@ func (c *Client) Chat(ctx context.Context, req provider.ChatRequest) (*provider.
 			Err:      err,
 		}
 	}
-	defer httpResp.Body.Close()
+	defer provider.DrainAndClose(httpResp.Body)
 
 	if httpResp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxErrorBody))
