@@ -1,25 +1,47 @@
 version: 2
 
+# Monthly and grouped on purpose. Weekly, ungrouped updates produced thirty
+# pull requests in a day, and split ones broke the build: k8s.io/apimachinery
+# cannot move without k8s.io/client-go. Major bumps are left out because they
+# need a human reading a changelog, not a merge button.
+
 updates:
-  # Actions go stale quietly, and a pinned action with a known issue is a
-  # supply-chain problem in its own right.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "ci"
 
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      go:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "deps"
 
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build"
+
