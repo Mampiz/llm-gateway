@@ -121,6 +121,38 @@ func TestCache_CollapsesIdenticalConcurrentRequests(t *testing.T) {
 	}
 }
 
+// Exactly one request in a collapsed burst is the singleflight leader: the
+// one that actually made the paid upstream call. Reporting it as a cache hit
+// would drop its token usage from metrics without anyone ever recording it.
+func TestCache_LeaderOfACollapsedBurstIsNotACacheHit(t *testing.T) {
+	var calls atomic.Int32
+	h := cachingHandler(t, countingProvider(&calls, 150*time.Millisecond), time.Minute, "shared")
+
+	const concurrent = 20
+	var wg sync.WaitGroup
+	statuses := make([]string, concurrent)
+
+	for i := range concurrent {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses[i] = do(h, http.MethodPost, "/v1/chat/completions", validBody).Header().Get(cacheHeader)
+		}()
+	}
+	wg.Wait()
+
+	var misses int
+	for _, status := range statuses {
+		if status == cacheMiss {
+			misses++
+		}
+	}
+	if misses != 1 {
+		t.Errorf("%d of %d collapsed requests reported %s, want exactly 1 (the leader that paid for the call)",
+			misses, concurrent, cacheMiss)
+	}
+}
+
 // Turning the cache off must leave one code path, not a half-configured one.
 func TestCache_DisabledAlwaysCallsTheProvider(t *testing.T) {
 	var calls atomic.Int32

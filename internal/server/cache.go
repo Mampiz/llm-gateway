@@ -65,7 +65,10 @@ func (s *Server) cachedChat(ctx context.Context, r *http.Request, req provider.C
 		served string
 	}
 
+	var executed bool
 	v, err, shared := s.inflight.Do(key, func() (any, error) {
+		executed = true
+
 		// The shared call runs with whichever caller arrived first, but it is
 		// serving all of them. Tying it to that one caller's cancellation
 		// would fail everybody waiting behind it the moment the leader
@@ -101,6 +104,9 @@ func (s *Server) cachedChat(ctx context.Context, r *http.Request, req provider.C
 
 	res, _ := v.(result)
 	// A follower of a shared call did not pay for the answer either, which is
-	// the whole point of collapsing them.
-	return res.resp, res.served, res.served == servedByCache || shared, nil
+	// the whole point of collapsing them. shared is set identically for the
+	// leader and its followers, so it only means "someone else joined this
+	// call" - excluding the leader (executed) keeps the caller who actually
+	// paid for the answer from being counted as a cache hit too.
+	return res.resp, res.served, res.served == servedByCache || (shared && !executed), nil
 }
